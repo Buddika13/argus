@@ -17,6 +17,7 @@ opaque numeric score:
 from __future__ import annotations
 
 import html
+import json
 import time
 from pathlib import Path
 
@@ -30,6 +31,10 @@ def render(storage: Storage, vantage: str = "local", refresh_seconds: int = 0) -
     counts = storage.table_counts()
     healthy = sum(1 for x in rows if x["status"] == "HEALTHY")
 
+    # Resolvers that are actually reporting come first, most serious first;
+    # unconfigured placeholders sink to the bottom instead of heading the table.
+    rows.sort(key=lambda x: (_STATUS_ORDER.get(x["status"], 9), x["name"]))
+
     # "No data" is shown explicitly rather than invented.
     has_data = counts.get("query_results", 0) > 0 or counts.get("health_metrics", 0) > 0
     banner = "" if has_data else (
@@ -40,6 +45,7 @@ def render(storage: Storage, vantage: str = "local", refresh_seconds: int = 0) -
 
     return _PAGE.format(
         css=_CSS, meta_refresh=meta_refresh, banner=banner,
+        verdict=_verdict(counts.get("alerts", 0), counts.get("anomalies", 0), has_data),
         vantage=_e(vantage), generated=time.strftime("%Y-%m-%d %H:%M:%S"),
         cards=_cards(counts, rows, healthy),
         resolver_rows=_resolver_table(rows),
@@ -177,33 +183,98 @@ def _sparkline(values: list[float]) -> str:
             f'stroke="currentColor" stroke-width="1.5"/></svg>')
 
 
+_STATUS_ORDER = {"ALERT": 0, "ANOMALY": 1, "DEGRADED": 2, "HEALTHY": 3, "NO DATA": 8}
+
+_ICONS = {
+    "resolvers": "M4 6h16M4 12h16M4 18h10",
+    "healthy": "M4 12l5 5L20 6",
+    "anomalies": "M12 4v9m0 4v.5M3 20h18L12 3z",
+    "poisoning": "M12 3a9 9 0 100 18 9 9 0 000-18zM8 8l8 8m0-8l-8 8",
+    "queries": "M4 19V9m5 10V5m5 14v-7m5 7V8",
+}
+
+
+def _icon(path: str) -> str:
+    return ('<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<path d="' + path + '"/></svg>')
+
+
+def _verdict(alerts: int, anomalies: int, has_data: bool) -> str:
+    """One unambiguous headline: is anything wrong right now?"""
+    if not has_data:
+        return ('<div class="verdict idle">' + _icon(_ICONS["queries"]) +
+                '<div><b>Awaiting first sweep</b>'
+                '<span>No measurements have been recorded yet.</span></div></div>')
+    if alerts:
+        plural = "event" if alerts == 1 else "events"
+        return ('<div class="verdict bad">' + _icon(_ICONS["poisoning"]) +
+                '<div><b>' + str(alerts) + ' possible cache-poisoning ' + plural + '</b>'
+                '<span>An integrity anomaly survived every independent check. '
+                'Possible &mdash; not proven.</span></div></div>')
+    if anomalies:
+        return ('<div class="verdict warn">' + _icon(_ICONS["anomalies"]) +
+                '<div><b>' + str(anomalies) + ' integrity anomalies, none confirmed</b>'
+                '<span>Differences were seen, but independent checks explained them '
+                'benignly.</span></div></div>')
+    return ('<div class="verdict ok">' + _icon(_ICONS["healthy"]) +
+            '<div><b>All clear</b><span>Every monitored resolver agreed with the '
+            'authoritative hierarchy.</span></div></div>')
+
+
 def _cards(counts, rows, healthy) -> str:
-    poison = counts.get("alerts", 0)
     data = [
-        ("ok", len(rows), "resolvers"),
-        ("ok", healthy, "healthy"),
-        ("warn", counts.get("anomalies", 0), "anomalies"),
-        ("bad", poison, "possible poisoning"),
-        ("muted", counts.get("query_results", 0), "queries recorded"),
+        ("neutral", len(rows), "resolvers", "resolvers"),
+        ("ok", healthy, "healthy", "healthy"),
+        ("warn", counts.get("anomalies", 0), "anomalies", "anomalies"),
+        ("bad", counts.get("alerts", 0), "possible poisoning", "poisoning"),
+        ("neutral", counts.get("query_results", 0), "queries recorded", "queries"),
     ]
     return "".join(
-        f'<div class="card {c}"><div class="n">{n}</div><div class="l">{_e(l)}</div></div>'
-        for c, n, l in data)
+        '<div class="card ' + c + '"><div class="chead">' + _icon(_ICONS[i]) +
+        '<span class="l">' + _e(l) + '</span></div>'
+        '<div class="n">' + str(n) + '</div></div>'
+        for c, n, l, i in data)
+
+
+def _role_chip(role) -> str:
+    is_control = (role or "").lower() == "control"
+    kind = "control" if is_control else "subject"
+    label = "CONTROL" if is_control else "MONITORED"
+    return '<span class="chip ' + kind + '">' + label + '</span>'
+
+
+def _latency_bar(value, ceiling: float) -> str:
+    """A latency figure with a proportional bar, so slow resolvers stand out."""
+    if not isinstance(value, (int, float)):
+        return '<span class="muted">&mdash;</span>'
+    width = max(3.0, min(100.0, value / ceiling * 100.0)) if ceiling else 3.0
+    tone = "ok" if value < 60 else "warn" if value < 150 else "bad"
+    return ('<div class="lat"><span class="v">' + "%.0f ms" % value + '</span>'
+            '<span class="bar"><i class="' + tone + '" style="width:'
+            + "%.0f" % width + '%"></i></span></div>')
 
 
 def _resolver_table(rows) -> str:
     if not rows:
         return '<tr><td colspan="10" class="empty">No data available.</td></tr>'
+    ceiling = max([x["latency"] for x in rows
+                   if isinstance(x["latency"], (int, float))] or [1.0])
     out = ""
     for x in rows:
+        dim = " dim" if x["status"] == "NO DATA" else ""
         out += (
-            f"<tr><td><b>{_e(x['name'])}</b></td><td class='mono'>{_e(x['ip'])}</td>"
-            f"<td>{_badge(x['status'])}</td>"
-            f"<td>{_pct(x['availability'])}</td><td>{_ms(x['latency'])}</td>"
-            f"<td>{_rate(x['correctness'])}</td><td>{_e(x['freshness'] or '—')}</td>"
-            f"<td class='mono small'>{_e(x['dnssec'])}</td>"
-            f"<td class='trend'>{x['spark']}</td>"
-            f"<td class='small'>{_ts(x['last'])}</td></tr>")
+            "<tr class='rrow" + dim + "'>"
+            "<td><b>" + _e(x["name"]) + "</b> " + _role_chip(x.get("role")) + "</td>"
+            "<td class='mono'>" + _e(x["ip"]) + "</td>"
+            "<td>" + _badge(x["status"]) + "</td>"
+            "<td>" + _pct(x["availability"]) + "</td>"
+            "<td>" + _latency_bar(x["latency"], ceiling) + "</td>"
+            "<td>" + _rate(x["correctness"]) + "</td>"
+            "<td>" + _e(x["freshness"] or "—") + "</td>"
+            "<td class='mono small'>" + _e(x["dnssec"]) + "</td>"
+            "<td class='trend'>" + x["spark"] + "</td>"
+            "<td class='small muted'>" + _ts(x["last"]) + "</td></tr>")
     return out
 
 
@@ -212,10 +283,12 @@ def _events(storage) -> str:
     if not rows:
         return '<tr><td colspan="5" class="empty">No data available.</td></tr>'
     return "".join(
-        f"<tr><td class='small'>{_ts(r['timestamp'])}</td><td>{_e(r['resolver'])}</td>"
-        f"<td>{_e(r['domain'])} <span class='muted'>{_e(r['query_type'])}</span></td>"
-        f"<td class='mono small'>{_e(r['rcode'])}</td>"
-        f"<td>{_class_badge(r['comparison_classification'])}</td></tr>"
+        "<tr><td class='small muted'>" + _ts(r["timestamp"]) + "</td>"
+        "<td><b>" + _e(r["resolver"]) + "</b></td>"
+        "<td>" + _e(r["domain"]) + " <span class='chip type'>"
+        + _e(r["query_type"]) + "</span></td>"
+        "<td class='mono small'>" + _e(r["rcode"]) + "</td>"
+        "<td>" + _class_badge(r["comparison_classification"]) + "</td></tr>"
         for r in rows)
 
 
@@ -224,22 +297,52 @@ def _anomalies(storage) -> str:
     if not rows:
         return '<tr><td colspan="5" class="empty">No data available.</td></tr>'
     return "".join(
-        f"<tr><td class='small'>{_ts(r['observed_at'])}</td><td>{_e(r['resolver'])}</td>"
-        f"<td>{_e(r['domain'])} <span class='muted'>{_e(r['rtype'])}</span></td>"
-        f"<td>{_class_badge(r['classification'])}</td>"
-        f"<td class='small'>{_e(r['verification_state'])}</td></tr>"
+        "<tr><td class='small muted'>" + _ts(r["observed_at"]) + "</td>"
+        "<td><b>" + _e(r["resolver"]) + "</b></td>"
+        "<td>" + _e(r["domain"]) + " <span class='chip type'>"
+        + _e(r["rtype"]) + "</span></td>"
+        "<td>" + _class_badge(r["classification"]) + "</td>"
+        "<td class='small'>" + _e(r["verification_state"]) + "</td></tr>"
         for r in rows)
+
+
+def _evidence_summary(raw) -> str:
+    """A readable summary of a stored evidence chain, rather than a JSON dump."""
+    try:
+        ev = json.loads(raw)
+    except (TypeError, ValueError):
+        return "<span class='mono small'>" + _e(raw) + "</span>"
+
+    bits = []
+    unpublished = (ev.get("stage1") or {}).get("unpublished") or []
+    if unpublished:
+        shown = ", ".join(unpublished[:3])
+        more = " +%d" % (len(unpublished) - 3) if len(unpublished) > 3 else ""
+        bits.append("returned <b class='badink'>" + _e(shown + more) +
+                    "</b>, which the zone never published")
+    controls = ev.get("stage3_controls") or {}
+    if controls.get("queried") and not controls.get("corroborates_unexpected"):
+        bits.append("%d independent resolvers disagreed" % len(controls["queried"]))
+    persistence = ev.get("stage5_persistence") or {}
+    if persistence.get("persistent"):
+        bits.append("persisted across %s/%s repeats" % (
+            persistence.get("reproduced", "?"), persistence.get("repetitions", "?")))
+    if (ev.get("stage4_dnssec") or {}).get("zone_signed"):
+        bits.append("on a DNSSEC-signed zone")
+    return "; ".join(bits) or "<span class='muted'>see stored evidence</span>"
 
 
 def _alerts(storage) -> str:
     rows = storage.recent_alerts(15)
     if not rows:
-        return '<tr><td colspan="4" class="empty">No possible cache-poisoning events. ' \
-               'All clear.</td></tr>'
+        return ('<tr><td colspan="4" class="empty allclear">'
+                'No possible cache-poisoning events. All clear.</td></tr>')
     return "".join(
-        f"<tr><td class='small'>{_ts(r['confirmed_at'])}</td><td>{_e(r['resolver'])}</td>"
-        f"<td>{_e(r['domain'])} <span class='muted'>{_e(r['rtype'])}</span></td>"
-        f"<td class='mono small'>{_e(r['evidence'])}</td></tr>"
+        "<tr><td class='small muted'>" + _ts(r["confirmed_at"]) + "</td>"
+        "<td><b>" + _e(r["resolver"]) + "</b></td>"
+        "<td>" + _e(r["domain"]) + " <span class='chip type'>"
+        + _e(r["rtype"]) + "</span></td>"
+        "<td class='ev'>" + _evidence_summary(r["evidence"]) + "</td></tr>"
         for r in rows)
 
 
@@ -247,64 +350,147 @@ def _class_badge(cls) -> str:
     cls = cls or "—"
     good = {"NORMAL", "BENIGN_DIFFERENCE"}
     bad = {"POSSIBLE_CACHE_POISONING", "DNS_INTEGRITY_ANOMALY"}
-    kind = "ok" if cls in good else "bad" if cls in bad else "warn" if cls != "—" else "muted"
-    return f'<span class="badge {kind} tiny">{_e(cls)}</span>'
+    kind = "ok" if cls in good else "bad" if cls in bad else \
+        "warn" if cls != "—" else "muted"
+    return '<span class="badge ' + kind + ' tiny">' + _e(cls) + "</span>"
 
 
 # -- static template + styles ----------------------------------------------
 _CSS = """
-:root{--bg:#f5f6f8;--card:#fff;--ink:#1b1f24;--muted:#6b7280;--line:#e4e7eb;
---ok:#137333;--okbg:#e6f4ea;--warn:#8a6d00;--warnbg:#fdf3d0;--bad:#b3261e;--badbg:#fce8e6;
---accent:#1a3d6d;}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e6e8eb;
---muted:#9aa1aa;--line:#2a2f36;--okbg:#0f2417;--warnbg:#2a2410;--badbg:#2a1113;--accent:#7fa8dd;}}
+:root{--bg:#eef1f6;--card:#fff;--ink:#141a21;--muted:#65707d;--line:#dfe4ec;
+--ok:#0e6b3d;--okbg:#e3f5ec;--warn:#8a5a00;--warnbg:#fdf1da;--bad:#b3261e;--badbg:#fdeceb;
+--accent:#123a63;--accent2:#2f6fb0;--shadow:0 1px 2px rgba(16,24,40,.06),0 4px 14px rgba(16,24,40,.06)}
+@media(prefers-color-scheme:dark){:root{--bg:#0c1015;--card:#161b22;--ink:#e6e9ee;
+--muted:#8e99a6;--line:#242c36;--ok:#4ade80;--okbg:#0d2419;--warn:#fbbf24;--warnbg:#2a2210;
+--bad:#f87171;--badbg:#2c1315;--accent:#8fb6e4;--accent2:#5f9bd8;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 6px 20px rgba(0,0,0,.35)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.wrap{max-width:1100px;margin:0 auto;padding:30px 22px 60px}
-header{border-bottom:2px solid var(--accent);padding-bottom:12px;margin-bottom:22px}
-h1{font-size:22px;margin:0;color:var(--accent)}
-.sub{color:var(--muted);font-size:13px;margin-top:3px}
-h2{font-size:15px;margin:28px 0 10px;color:var(--accent);
-border-left:3px solid var(--accent);padding-left:8px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
-.card .n{font-size:26px;font-weight:700}
-.card .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+font:14px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 64px}
+
+/* masthead */
+.mast{background:linear-gradient(135deg,#0d2c4d 0%,#123a63 45%,#1d5286 100%);
+color:#eaf2fb;margin:0 -20px 26px;padding:26px 20px 24px;box-shadow:var(--shadow)}
+.mastin{max-width:1140px;margin:0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.eye{width:38px;height:38px;flex:none;opacity:.95}
+.mast h1{font-size:19px;margin:0;font-weight:650;letter-spacing:-.01em;color:#fff}
+.mast .sub{color:#b6cbe4;font-size:12.5px;margin-top:2px}
+.mast .sub b{color:#eaf2fb;font-weight:600}
+.spacer{flex:1 1 auto}
+.live{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#b6cbe4;
+border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:4px 11px}
+
+/* verdict banner */
+.verdict{display:flex;align-items:center;gap:13px;border-radius:12px;padding:15px 18px;
+margin-bottom:20px;border:1px solid var(--line);background:var(--card);box-shadow:var(--shadow)}
+.verdict .ico{width:26px;height:26px;flex:none}
+.verdict b{display:block;font-size:15px;letter-spacing:-.01em}
+.verdict span{display:block;color:var(--muted);font-size:12.5px;margin-top:1px}
+.verdict.ok{background:var(--okbg);border-color:transparent;color:var(--ok)}
+.verdict.bad{background:var(--badbg);border-color:transparent;color:var(--bad)}
+.verdict.warn{background:var(--warnbg);border-color:transparent;color:var(--warn)}
+.verdict.ok b,.verdict.bad b,.verdict.warn b{color:inherit}
+.verdict.idle{color:var(--muted)}
+
+h2{font-size:12px;margin:30px 0 11px;color:var(--muted);font-weight:650;
+text-transform:uppercase;letter-spacing:.09em}
+
+/* stat cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:15px 17px 17px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.card:before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--muted);opacity:.5}
+.card.ok:before{background:var(--ok);opacity:1}
+.card.warn:before{background:var(--warn);opacity:1}
+.card.bad:before{background:var(--bad);opacity:1}
+.card.neutral:before{background:var(--accent2);opacity:.9}
+.chead{display:flex;align-items:center;gap:7px;color:var(--muted)}
+.chead .ico{width:14px;height:14px;flex:none}
+.card .l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.card .n{font-size:31px;font-weight:700;letter-spacing:-.02em;margin-top:7px;
+font-variant-numeric:tabular-nums}
 .card.ok .n{color:var(--ok)}.card.warn .n{color:var(--warn)}.card.bad .n{color:var(--bad)}
-.tablewrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;background:var(--card);
-border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
-th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{background:rgba(127,127,127,.06);color:var(--muted);font-weight:600;
-text-transform:uppercase;font-size:11px;letter-spacing:.03em}
+
+/* tables */
+.tablewrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);
+border-radius:12px;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:650;text-transform:uppercase;font-size:10.5px;
+letter-spacing:.07em;background:rgba(127,127,127,.05)}
 tr:last-child td{border-bottom:none}
-.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
-.badge.tiny{font-size:10px;padding:1px 6px}
+tbody tr:hover td,.rrow:hover td{background:rgba(127,127,127,.045)}
+.rrow.dim td{opacity:.5}
+
+/* badges + chips */
+.badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:10.5px;
+font-weight:700;letter-spacing:.04em}
+.badge.tiny{font-size:9.5px;padding:2px 7px;letter-spacing:.03em}
 .badge.ok{background:var(--okbg);color:var(--ok)}
 .badge.warn{background:var(--warnbg);color:var(--warn)}
 .badge.bad{background:var(--badbg);color:var(--bad)}
-.badge.muted{background:rgba(127,127,127,.12);color:var(--muted)}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.small{font-size:12px}.tiny{font-size:11px}
-.muted{color:var(--muted)}.trend{color:var(--accent)}
-.empty{color:var(--muted);font-style:italic;text-align:center;padding:16px}
-.banner{background:var(--warnbg);color:var(--warn);border:1px solid var(--line);
-border-radius:8px;padding:12px 16px;margin-bottom:18px;font-size:13px}
-.banner code{font-family:ui-monospace,Consolas,monospace}
-footer{color:var(--muted);font-size:11px;margin-top:30px;line-height:1.7}
+.badge.muted{background:rgba(127,127,127,.13);color:var(--muted)}
+.chip{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;
+padding:1px 6px;border-radius:4px;vertical-align:1px;
+background:rgba(127,127,127,.13);color:var(--muted)}
+.chip.control{background:rgba(47,111,176,.14);color:var(--accent2)}
+.chip.subject{background:rgba(127,127,127,.14);color:var(--muted)}
+
+/* latency bar */
+.lat{min-width:104px}
+.lat .v{font-variant-numeric:tabular-nums;font-size:12.5px}
+.lat .bar{display:block;height:4px;border-radius:3px;background:rgba(127,127,127,.16);
+margin-top:4px;overflow:hidden}
+.lat .bar i{display:block;height:100%;border-radius:3px;background:var(--muted)}
+.lat .bar i.ok{background:var(--ok)}
+.lat .bar i.warn{background:var(--warn)}
+.lat .bar i.bad{background:var(--bad)}
+
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.small{font-size:12px}.muted{color:var(--muted)}
+.trend{color:var(--accent2)}
+.ev{white-space:normal;max-width:520px;font-size:12.5px;line-height:1.5}
+.badink{color:var(--bad)}
+.empty{color:var(--muted);font-style:italic;text-align:center;padding:20px}
+.empty.allclear{color:var(--ok);font-style:normal;font-weight:600}
+.banner{background:var(--warnbg);color:var(--warn);border-radius:10px;
+padding:13px 16px;margin-bottom:18px;font-size:13px}
+.banner code{font-family:ui-monospace,Consolas,monospace;
+background:rgba(0,0,0,.07);padding:1px 5px;border-radius:4px}
+footer{color:var(--muted);font-size:11.5px;margin-top:34px;line-height:1.75;
+border-top:1px solid var(--line);padding-top:16px}
+@media print{body{background:#fff}.mast{background:#123a63!important;
+-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.tablewrap,.card,.verdict{box-shadow:none}}
+@media(max-width:640px){.mast h1{font-size:16px}.card .n{font-size:26px}}
 """
+
+_EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
+        'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M2 24s8-13 22-13 22 13 22 13-8 13-22 13S2 24 2 24z"/>'
+        '<circle cx="24" cy="24" r="6.5"/><circle cx="24" cy="24" r="1.8" '
+        'fill="currentColor" stroke="none"/></svg>')
 
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Argus — Monitoring Dashboard</title>{meta_refresh}<style>{css}</style></head>
-<body><div class="wrap">
-<header>
-  <h1>Argus — DNS Caching-Server Health &amp; Cache-Poisoning Monitor</h1>
-  <div class="sub">vantage <b>{vantage}</b> &middot; generated {generated}</div>
-</header>
+<title>Argus &mdash; Monitoring Dashboard</title>{meta_refresh}<style>{css}</style></head>
+<body>
+<div class="mast"><div class="mastin">
+  """ + _EYE + """
+  <div>
+    <h1>Argus &mdash; DNS Caching-Server Health &amp; Cache-Poisoning Monitor</h1>
+    <div class="sub">vantage <b>{vantage}</b> &middot; generated {generated}</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="live">Independent verification</div>
+</div></div>
+
+<div class="wrap">
 {banner}
+{verdict}
 
 <h2>Overall system status</h2>
 <div class="cards">{cards}</div>
@@ -312,7 +498,8 @@ _PAGE = """<!doctype html>
 <h2>Monitored resolvers</h2>
 <div class="tablewrap"><table>
 <tr><th>Resolver</th><th>IP</th><th>Status</th><th>Availability</th><th>Avg latency</th>
-<th>Correctness</th><th>Freshness</th><th>DNSSEC</th><th>Availability trend</th><th>Last checked</th></tr>
+<th>Correctness</th><th>Freshness</th><th>DNSSEC</th><th>Availability trend</th>
+<th>Last checked</th></tr>
 {resolver_rows}
 </table></div>
 
