@@ -359,6 +359,74 @@ class Storage:
             "SELECT * FROM dnssec_status WHERE resolver=? ORDER BY observed_at DESC LIMIT 1",
             (resolver,)).fetchone()
 
+    # -- filtered / paginated reads (used by the dashboard pages) ---------
+    @staticmethod
+    def _event_filters(resolver: str = "", domain: str = "", rtype: str = "",
+                       classification: str = "", since: float = 0.0,
+                       search: str = "") -> tuple[str, list]:
+        """Build a WHERE clause over monitoring_events. Empty filters are ignored."""
+        clauses, params = [], []
+        if resolver:
+            clauses.append("resolver = ?")
+            params.append(resolver)
+        if domain:
+            clauses.append("domain = ?")
+            params.append(domain)
+        if rtype:
+            clauses.append("query_type = ?")
+            params.append(rtype)
+        if classification:
+            clauses.append("comparison_classification = ?")
+            params.append(classification)
+        if since:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if search:
+            clauses.append("(domain LIKE ? OR resolver LIKE ? OR returned_records LIKE ?)")
+            like = "%" + search + "%"
+            params.extend([like, like, like])
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def search_events(self, limit: int = 25, offset: int = 0,
+                      **filters) -> list[sqlite3.Row]:
+        """A page of monitoring events, newest first, matching the filters."""
+        where, params = self._event_filters(**filters)
+        return self._conn.execute(
+            "SELECT * FROM monitoring_events" + where +
+            " ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+
+    def count_events(self, **filters) -> int:
+        """How many monitoring events match the filters (for pagination)."""
+        where, params = self._event_filters(**filters)
+        return self._conn.execute(
+            "SELECT count(*) FROM monitoring_events" + where, params).fetchone()[0]
+
+    def distinct_events_column(self, column: str) -> list[str]:
+        """Distinct values of one monitoring_events column, for filter menus."""
+        allowed = {"resolver", "domain", "query_type", "comparison_classification"}
+        if column not in allowed:
+            raise ValueError("column not allowed: " + column)
+        rows = self._conn.execute(
+            "SELECT DISTINCT " + column + " FROM monitoring_events"
+            " WHERE " + column + " IS NOT NULL AND " + column + " <> ''"
+            " ORDER BY " + column).fetchall()
+        return [r[0] for r in rows]
+
+    def anomaly_by_id(self, anomaly_id: int) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM anomalies WHERE id = ?", (anomaly_id,)).fetchone()
+
+    def alert_by_id(self, alert_id: int) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+
+    def events_for_resolver(self, resolver: str, limit: int = 20) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM monitoring_events WHERE resolver = ?"
+            " ORDER BY timestamp DESC LIMIT ?", (resolver, limit)).fetchall()
+
     def table_counts(self) -> dict[str, int]:
         return {t: self._conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                 for t in _TABLES}

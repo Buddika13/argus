@@ -128,6 +128,9 @@ class AnomalyVerifier:
             1 for recs in control_records.values() if recs - auth_records) >= 2
         evidence["stage3_controls"] = {
             "queried": list(control_records),
+            # What each trusted resolver actually answered, so a finding can be
+            # re-read later without re-running the network checks.
+            "answers": {name: sorted(recs) for name, recs in control_records.items()},
             "corroborates_unexpected": corroborated,
             "systemic_disagreement": systemic,
         }

@@ -94,6 +94,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     finally:
         storage.close()
     print(f"Dashboard written to {out}")
+    print("Pages:", ", ".join(f[1] for f in dashboard.PAGES))
     if not args.no_open:
         webbrowser.open(out.as_uri())
         print("Opened in your browser.")

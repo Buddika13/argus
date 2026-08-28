@@ -166,11 +166,29 @@ Parameterised queries; schema creation is idempotent and never deletes data.
 
 ## 16. Dashboard ✅
 
-`dashboard.py` — a self-contained HTML page (no server required) showing system
-status, per-resolver health (availability, latency, correctness, freshness,
-DNSSEC), recent queries, anomalies, and possible-poisoning events. A **live
-auto-refreshing** mode (`argus dashboard`) re-reads the database on every
-request. Clear "No data available" state. *Tested.*
+The `argus/dashboard/` package renders **seven focused pages** rather than one
+long page, each with a single job:
+
+| Page | Shows |
+|---|---|
+| Overview | totals, overall verdict, latest three alerts, resolver summary |
+| Resolver Health | availability, latency, correctness, freshness, DNSSEC, per-resolver detail |
+| Cache Poisoning Detection | each event with returned vs authoritative vs trusted answers, and the full evidence chain |
+| DNS Query Monitor | every measurement, with search, five filters and paging |
+| Anomaly Investigation | anomalies, their stored checks, and the legitimate explanations each was tested against |
+| Independent Verification | a live check of one resolver against the controls and the hierarchy |
+| Reports | daily, resolver-health, anomaly, and cache-poisoning reports |
+
+Findings are reported as one of three verdicts — `NO_POISONING_DETECTED`,
+`POSSIBLE_CACHE_POISONING`, `INCONCLUSIVE` — mapped from the stored
+classification by `dashboard/verdict.py`. The mapping never re-decides anything;
+the classification in the database remains the authority.
+
+`argus report` writes all seven pages as static files that open without a
+server; `argus dashboard` serves them live, re-reading the database on every
+request, which is also what makes filtering, paging and live verification work.
+Every page is self-contained: no script, no external asset. Clear "No data
+available" state. *Tested (14 dashboard tests).*
 
 ## 17. Technology stack
 
