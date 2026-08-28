@@ -1,0 +1,6 @@
+# Argus runtime dependencies.
+dnspython>=2.6.1
+PyYAML>=6.0.1
+
+# Analysis-only (evaluation graphs; not required to run Argus):
+#   matplotlib>=3.8

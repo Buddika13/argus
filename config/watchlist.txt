@@ -1,0 +1,11 @@
+# Monitored domains — the watch-list. One per line; blank lines and
+# comments (#) are ignored. Fully configurable: add or remove domains here.
+#
+# Prefer domains with reasonably stable address sets. Domains behind heavy
+# geo load-balancing (e.g. google.com) can differ per location and may show up
+# as differences that are benign rather than poisoning.
+
+google.com
+microsoft.com
+cloudflare.com
+nsbm.ac.lk

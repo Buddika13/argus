@@ -1,0 +1,25 @@
+# Optional systemd unit to serve the live Argus dashboard continuously.
+#
+#   sudo cp deploy/argus-dashboard.service /etc/systemd/system/argus-dashboard.service
+#   # edit User= and paths, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now argus-dashboard
+#
+# Serves the dashboard on http://127.0.0.1:8080 (loopback only). To reach it from
+# another machine, use an SSH tunnel:  ssh -L 8080:127.0.0.1:8080 user@server
+
+[Unit]
+Description=Argus live dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_YOUR_USERNAME
+WorkingDirectory=/home/REPLACE_WITH_YOUR_USERNAME/argus
+ExecStart=/home/REPLACE_WITH_YOUR_USERNAME/argus/.venv/bin/python -m argus dashboard --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+# Argus configuration.
+# Every value here has a default in src/argus/config.py; this file overrides them.
+
+# Identifies the probe node. Overridden by the ARGUS_VANTAGE env var.
+vantage: local-dev
+
+schedule:
+  # Seconds between full sweeps of the watch-list.
+  interval_seconds: 900
+  # Concurrent (domain, resolver) probes in flight. Keep modest — we are a guest
+  # on someone else's resolver.
+  concurrency: 8
+  # Extra pause between individual queries to the same resolver, in seconds.
+  per_resolver_delay: 0.25
+  # Shuffle the work queue each sweep so one resolver is not always probed first.
+  shuffle: true
+
+query:
+  timeout_seconds: 5.0
+  # Retries per query before recording an ERROR verdict.
+  retries: 2
+  # Record types compared per domain.
+  rdtypes: [A, AAAA]
+
+trusted_walk:
+  # Cache referrals (root/TLD nameservers) for this long to avoid hammering the
+  # root servers. Authoritative answers themselves are never cached.
+  referral_cache_seconds: 3600
+  timeout_seconds: 5.0
+  max_depth: 12
+
+dnssec:
+  enabled: true
+  # Probed once per sweep, not once per domain.
+  signed_zone: dnssec-tools.org
+  broken_zone: dnssec-failed.org
+
+freshness:
+  # Flag a cache entry whose observed TTL exceeds the authoritative TTL by more
+  # than this ratio — a sign of an artificially extended (possibly injected) entry.
+  max_ttl_ratio: 1.05
+
+storage:
+  # sqlite | influx | none
+  backend: sqlite
+  sqlite:
+    path: data/argus.db
+  influx:
+    # Values are read from the environment; see .env.example
+    measurement: dns_health
+
+metrics:
+  enabled: true
+  host: 0.0.0.0
+  port: 9109
+
+logging:
+  level: INFO

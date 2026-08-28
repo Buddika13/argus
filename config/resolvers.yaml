@@ -1,0 +1,61 @@
+# Monitored DNS resolvers.
+#
+# role: isp     -> the subject of the research (a Sri Lankan ISP resolver)
+# role: control -> known-good public resolvers used as a baseline
+#
+# IMPORTANT: the ISP addresses below are PLACEHOLDERS in the reserved
+# documentation range (RFC 5737, 192.0.2.0/24 / 203.0.113.0/24). No real ISP
+# resolver IP is hard-coded. Replace each `address` with the resolver actually
+# handed out by that ISP at your vantage point, then set `enabled: true`.
+
+resolvers:
+  # --- Sri Lankan ISPs (fill in real addresses, then enable) -------------
+  - name: slt
+    address: 192.0.2.11        # REPLACE with SLT's resolver IP
+    role: isp
+    isp: SLT
+    country: LK
+    enabled: false
+
+  - name: mobitel
+    address: 192.0.2.12        # REPLACE with Mobitel's resolver IP
+    role: isp
+    isp: Mobitel
+    country: LK
+    enabled: false
+
+  - name: dialog
+    address: 192.0.2.13        # REPLACE with Dialog's resolver IP
+    role: isp
+    isp: Dialog
+    country: LK
+    enabled: false
+
+  - name: hutch
+    address: 192.0.2.14        # REPLACE with Hutch's resolver IP
+    role: isp
+    isp: Hutch
+    country: LK
+    enabled: false
+
+  # --- public control resolvers (safe to run by default) ----------------
+  - name: google
+    address: 8.8.8.8
+    role: control
+    isp: Google
+    country: ANY
+    enabled: true
+
+  - name: cloudflare
+    address: 1.1.1.1
+    role: control
+    isp: Cloudflare
+    country: ANY
+    enabled: true
+
+  - name: quad9
+    address: 9.9.9.9
+    role: control
+    isp: Quad9
+    country: ANY
+    enabled: true

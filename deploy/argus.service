@@ -1,0 +1,28 @@
+# systemd unit to run Argus continuously on Ubuntu.
+#
+# Install:
+#   sudo cp deploy/argus.service /etc/systemd/system/argus.service
+#   # edit User= and the two paths below to match your machine, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now argus
+#   systemctl status argus
+#   journalctl -u argus -f          # follow the logs
+#
+# This makes Ubuntu itself the always-on monitoring server (no other server
+# software required). Argus writes to its SQLite database on each sweep.
+
+[Unit]
+Description=Argus DNS caching-server health & cache-poisoning monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_YOUR_USERNAME
+WorkingDirectory=/home/REPLACE_WITH_YOUR_USERNAME/argus
+ExecStart=/home/REPLACE_WITH_YOUR_USERNAME/argus/.venv/bin/python -m argus serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
