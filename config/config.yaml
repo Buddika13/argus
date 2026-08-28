@@ -6,7 +6,9 @@ vantage: local-dev
 
 schedule:
   # Seconds between full sweeps of the watch-list.
-  interval_seconds: 900
+  # 300 = every 5 minutes. Raise it if you add many resolvers or domains: we are
+  # a guest on someone else's resolver and the query load scales with both.
+  interval_seconds: 300
   # Concurrent (domain, resolver) probes in flight. Keep modest — we are a guest
   # on someone else's resolver.
   concurrency: 8

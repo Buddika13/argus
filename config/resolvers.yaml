@@ -59,3 +59,36 @@ resolvers:
     isp: Quad9
     country: ANY
     enabled: true
+
+  # Verified reachable from a Sri Lankan vantage point (probed with
+  # scripts/discover_resolvers.py: NOERROR, AD flag set). Widening the control
+  # set strengthens the cross-check stage of the anomaly engine.
+  - name: opendns
+    address: 208.67.222.222
+    role: control
+    isp: OpenDNS
+    country: ANY
+    enabled: true
+
+  # AdGuard filters by design and answered www.boc.lk from a different CDN edge
+  # (108.159.15.0/24) than the authoritative zone published (13.35.163.0/24),
+  # while all four other resolvers matched it exactly. A control that disagrees
+  # with ground truth corrupts the cross-check stage, so it is not one.
+  - name: adguard
+    address: 94.140.14.14
+    role: isp
+    isp: AdGuard
+    country: ANY
+    enabled: false
+
+  # --- laboratory only: the deliberately poisoned resolver ----------------
+  # Set enabled: true ONLY while scripts/demo_hijack.py --serve is running, to
+  # show a poisoned resolver beside healthy ones on the live dashboard. It is a
+  # loopback process under our own control; no third-party resolver is involved.
+  - name: lab-poisoned
+    address: 127.0.0.1
+    port: 5354
+    role: isp
+    isp: Laboratory
+    country: LAB
+    enabled: false

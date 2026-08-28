@@ -213,7 +213,17 @@ python -m argus dashboard     # live auto-refreshing dashboard (http://127.0.0.1
 python -m argus serve         # continuous monitoring (Ctrl+C to stop)
 ```
 
-Database helper: `python scripts/init_db.py [--with-sample-data]`.
+Helper scripts:
+
+```bash
+python scripts/init_db.py [--with-sample-data]   # create/seed the database
+python scripts/show_evidence.py                  # measurements + alert evidence chains
+python scripts/discover_resolvers.py --isp SLT   # find & verify this vantage's resolvers
+python scripts/demo_workflow.py nsbm.ac.lk 1.1.1.1   # one query through every stage
+python scripts/demo_hijack.py                    # honest vs poisoned, side by side
+python scripts/collect_eval.py --sweeps 6        # evaluation dataset
+python scripts/graph_eval.py                     # research figures -> graphs/
+```
 
 ## 21. Example ACTUAL output
 
@@ -262,6 +272,15 @@ A clean, coherent dataset was collected (`scripts/collect_eval.py`): **6 sweeps,
 144 queries, 3 control resolvers, 0 failures**, from a single vantage point.
 Eight research graphs were generated from this real data (`scripts/graph_eval.py`
 → `graphs/`). Actual results:
+
+> **Note on configuration.** These results were recorded with the original
+> configuration (3 controls, 4 domains including `google.com` and `microsoft.com`,
+> 900 s interval). The shipped configuration has since been narrowed on the basis
+> of these findings: the geo-load-balanced domains that produced every false
+> positive were removed, OpenDNS was added as a fourth control, and the interval
+> was set to 300 s. That change cut sweep time from 523.8 s to 31.5 s, which is
+> what makes a genuine five-minute cycle possible. Re-run `collect_eval.py` to
+> regenerate the dataset under the current configuration.
 
 | Metric | Result |
 |---|---|
@@ -315,8 +334,9 @@ attacked.
 - ⬜ **DNSSEC-validate the authoritative walk** itself.
 - ⬜ Test against **real Sri Lankan ISP resolvers**.
 - ⬜ Concurrency, delegation caching, and retention for larger scale.
-- ⬜ A packaged **lab-attacker** harness for reproducible true-positive
-  (detection) experiments.
+- ✅ A packaged **lab-attacker** harness for reproducible true-positive
+  (detection) experiments — `scripts/demo_hijack.py` runs a poisoned resolver on
+  loopback and shows the honest and hijacked verdicts side by side.
 - ⬜ Alerting integrations (email/webhook).
 
 ## 27. Research references

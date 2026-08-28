@@ -5,7 +5,29 @@
 # geo load-balancing (e.g. google.com) can differ per location and may show up
 # as differences that are benign rather than poisoning.
 
-google.com
-microsoft.com
+# google.com and microsoft.com were removed deliberately: both are heavily
+# geo-load-balanced, produced every false positive in the recorded experiment,
+# and their repeated multi-stage verification dominated sweep time.
 cloudflare.com
 nsbm.ac.lk
+
+# --- Sri Lankan domains of national interest ---------------------------
+# Each was vetted against the authoritative hierarchy through all five control
+# resolvers before being added: every control agreed, so a future mismatch is
+# evidence rather than geo-distribution noise.
+peoplesbank.lk
+cbsl.gov.lk
+gov.lk
+slt.lk
+dialog.lk
+
+# --- deliberately NOT monitored: geo-variable (measured) ----------------
+# These resolve to AWS CloudFront, whose edge set differs per resolver location.
+# Quad9 and AdGuard returned a different (equally genuine) edge set from the
+# authoritative one, which the comparison engine correctly reports as
+# poisoning-shaped. They are false positives, so they are excluded rather than
+# allowed to inflate the anomaly count. Uncomment only to demonstrate that
+# CDN effect deliberately.
+# www.boc.lk
+# boc.lk
+# nic.lk
