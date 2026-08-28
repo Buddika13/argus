@@ -14,3 +14,12 @@ data/
 # editors
 .vscode/
 .idea/
+
+# Generated dashboard pages (build output of `argus report`).
+report.html
+resolvers.html
+poisoning.html
+queries.html
+anomalies.html
+verification.html
+reports.html
