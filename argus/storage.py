@@ -418,6 +418,31 @@ class Storage:
         return self._conn.execute(
             "SELECT * FROM anomalies WHERE id = ?", (anomaly_id,)).fetchone()
 
+    def alert_measurements(self, alert_id: int) -> Optional[sqlite3.Row]:
+        """The measurements behind one alert: what was asked, and both answers.
+
+        An alert links to its anomaly, which links to the comparison, which links
+        to the two stored answers. Joining them recovers the complete monitored
+        answer, both TTLs and both response codes -- everything needed to show
+        why a verdict was reached, without re-querying anything.
+        """
+        return self._conn.execute(
+            "SELECT al.id AS alert_id, al.confirmed_at, al.resolver, al.domain,"
+            "       al.rtype, al.status, al.persisted_count,"
+            "       q.resolver_ip, q.records AS monitored_records,"
+            "       q.ttl AS monitored_ttl, q.rcode AS monitored_rcode,"
+            "       q.response_time_ms, q.authenticated,"
+            "       a.records AS auth_records, a.ttl AS auth_ttl,"
+            "       a.rcode AS auth_rcode, a.chain AS auth_chain,"
+            "       c.matched, c.unpublished, c.missing,"
+            "       c.ttl_ratio, c.ttl_inflated"
+            " FROM alerts al"
+            " LEFT JOIN anomalies an ON an.id = al.anomaly_id"
+            " LEFT JOIN comparisons c ON c.id = an.comparison_id"
+            " LEFT JOIN query_results q ON q.id = c.query_result_id"
+            " LEFT JOIN authoritative_results a ON a.id = c.authoritative_result_id"
+            " WHERE al.id = ?", (alert_id,)).fetchone()
+
     def alert_by_id(self, alert_id: int) -> Optional[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()

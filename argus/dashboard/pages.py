@@ -235,15 +235,48 @@ def poisoning(storage, live: bool) -> str:
 
         body += "<h2>" + ts(a["confirmed_at"]) + " &mdash; " + e(a["resolver"]) + "</h2>"
         body += "<div class='grid2'>"
+        # The stored measurements behind this alert: the COMPLETE monitored
+        # answer, both TTLs and both response codes. The evidence JSON keeps
+        # only the unpublished subset, which is not the same thing whenever the
+        # resolver returned some valid addresses alongside an unpublished one.
+        m = storage.alert_measurements(a["id"])
+
+        def field(key, fallback="—"):
+            value = m[key] if m is not None and m[key] is not None else None
+            return e(value) if value not in (None, "") else fallback
+
+        monitored_answer = (m["monitored_records"] if m is not None
+                            and m["monitored_records"] else "")
+        if not monitored_answer:                      # pre-join alerts
+            monitored_answer = ", ".join(stage1.get("unpublished") or [])
+        auth_answer = (m["auth_records"] if m is not None and m["auth_records"]
+                       else ", ".join(stage2.get("records") or []))
+        unpublished = (m["unpublished"] if m is not None and m["unpublished"]
+                       else ", ".join(stage1.get("unpublished") or []))
+
+        ttl_line = field("monitored_ttl") + " / " + field("auth_ttl")
+        if m is not None and m["ttl_ratio"] is not None:
+            ttl_line += " (ratio %.2f%s)" % (
+                m["ttl_ratio"], ", inflated" if m["ttl_inflated"] else "")
+
         body += ("<div class='panel'><h3>Observation</h3><dl class='kv'>"
                  "<dt>Timestamp</dt><dd>" + ts(a["confirmed_at"]) + "</dd>"
-                 "<dt>Resolver</dt><dd><b>" + e(a["resolver"]) + "</b></dd>"
+                 "<dt>Monitored resolver</dt><dd><b>" + e(a["resolver"]) + "</b> "
+                 "<span class='mono'>" + field("resolver_ip", "") + "</span></dd>"
                  "<dt>Domain</dt><dd>" + e(a["domain"]) + "</dd>"
                  "<dt>Record type</dt><dd>" + e(a["rtype"]) + "</dd>"
-                 "<dt>Returned answer</dt><dd class='mono'>"
-                 + e(", ".join(stage1.get("unpublished") or []) or "—") + "</dd>"
+                 "<dt>Monitored answer</dt><dd class='mono'>"
+                 + (e(monitored_answer) or "—") + "</dd>"
                  "<dt>Authoritative answer</dt><dd class='mono'>"
-                 + e(", ".join(stage2.get("records") or []) or "—") + "</dd>"
+                 + (e(auth_answer) or "—") + "</dd>"
+                 "<dt>Unpublished by the zone</dt><dd class='mono badink'>"
+                 + (e(unpublished) or "—") + "</dd>"
+                 "<dt>Also matched</dt><dd class='mono'>" + field("matched") + "</dd>"
+                 "<dt>Missing from answer</dt><dd class='mono'>"
+                 + field("missing") + "</dd>"
+                 "<dt>RCODE (mon / auth)</dt><dd class='mono'>"
+                 + field("monitored_rcode") + " / " + field("auth_rcode") + "</dd>"
+                 "<dt>TTL (mon / auth)</dt><dd class='mono'>" + ttl_line + "</dd>"
                  "<dt>Independent checks</dt><dd>" + str(len(stage3.get("queried") or []))
                  + " trusted resolvers</dd>"
                  "<dt>Persistence</dt><dd>"
