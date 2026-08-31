@@ -31,3 +31,24 @@ dialog.lk
 # www.boc.lk
 # boc.lk
 # nic.lk
+
+# --- top-level domain breadth ------------------------------------------
+# Registry and standards-body domains, one per TLD. Each was checked against
+# the authoritative hierarchy before inclusion: stable single or small address
+# sets, no CDN edge variance, sub-2s delegation walks. They widen coverage
+# across the DNS namespace without reintroducing geo-variable false positives.
+# mit.edu was trialled and removed: OpenDNS and Level3 returned a different
+# (equally genuine) Akamai edge than the zone published, which the engine
+# correctly reported as poisoning-shaped. A single-resolver check missed it;
+# candidates must be tested against every control before being added.
+iana.org
+nist.gov
+who.int
+ripe.net
+nominet.uk
+denic.de
+jprs.jp
+registry.in
+afnic.fr
+registro.br
+cira.ca

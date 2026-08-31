@@ -92,3 +92,26 @@ resolvers:
     isp: Laboratory
     country: LAB
     enabled: false
+
+  # Additional independent controls. Both were verified from this vantage:
+  # they agree with the authoritative answer, and they return NXDOMAIN for a
+  # non-existent name rather than redirecting it to an address. That second
+  # test matters -- a resolver that hijacks NXDOMAIN cannot serve as a
+  # corroborating source, which is why AdGuard was demoted.
+  - name: verisign
+    address: 64.6.64.6
+    role: control
+    isp: Verisign
+    country: ANY
+    enabled: true
+
+  # Level3 (4.2.2.1) was trialled and disabled: it answered one test domain
+  # correctly but failed to answer nominet.uk, jprs.jp, afnic.fr and
+  # registro.br at all. A control that intermittently fails weakens the
+  # cross-check and slows every sweep, so it is not one.
+  - name: level3
+    address: 4.2.2.1
+    role: control
+    isp: Level3
+    country: ANY
+    enabled: false
