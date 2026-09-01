@@ -25,6 +25,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+from .alerting import AlertSink
 from .comparison import compare
 from .config import Settings
 from .dnssec import DnssecInspector
@@ -42,7 +43,8 @@ class Scheduler:
     def __init__(self, settings: Settings, storage: Storage,
                  probe: ResolverProbe | None = None,
                  verifier: AuthoritativeVerifier | None = None,
-                 dnssec: DnssecInspector | None = None) -> None:
+                 dnssec: DnssecInspector | None = None,
+                 alert_sink: AlertSink | None = None) -> None:
         self.settings = settings
         self.storage = storage
         self.probe = probe or ResolverProbe(
@@ -61,6 +63,9 @@ class Scheduler:
             controls=[r for r in settings.resolvers if r.role == "control"],
             repetitions=max(2, settings.verification.get("persistence", 2)),
         )
+        # Delivers confirmed detections outside the database. Injectable so
+        # tests never touch the filesystem or the network.
+        self.alert_sink = alert_sink or AlertSink.from_settings(settings)
         self._stop = threading.Event()
 
     # -- one sweep --------------------------------------------------------
@@ -183,6 +188,13 @@ class Scheduler:
                                               confirmed_at=direct.observed_at)
                                 self.storage.insert_alert(alert, anomaly_id)
                                 summary["alerts"] += 1
+                                # Deliver outside the database. Never allowed to
+                                # affect the sweep: losing a notification is bad,
+                                # losing the measurement is worse.
+                                try:
+                                    self.alert_sink.send(alert, outcome.evidence)
+                                except Exception:  # noqa: BLE001
+                                    log.exception("alert delivery failed")
                                 log.warning("POSSIBLE cache poisoning: %s %s/%s",
                                             resolver.name, domain, rtype)
                     except Exception:  # noqa: BLE001 - one bad query must not stop the sweep

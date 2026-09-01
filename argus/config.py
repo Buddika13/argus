@@ -35,7 +35,10 @@ DEFAULTS: dict[str, Any] = {
         "persistence": 2,         # sweeps an anomaly must persist to confirm
     },
     "freshness": {"max_ttl_ratio": 1.05},
-    "dnssec": {"enabled": True},   # inspect DNSSEC posture/signedness during sweeps
+    "dnssec": {"enabled": True},
+    # Where a confirmed detection is delivered, beyond the database.
+    "alerting": {"enabled": True, "log_file": "data/alerts.log",
+                 "webhook_url": ""},   # inspect DNSSEC posture/signedness during sweeps
     "storage": {"path": "data/argus.sqlite3"},
     "dashboard": {"path": "report.html"},
     "logging": {"level": "INFO"},

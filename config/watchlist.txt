@@ -1,46 +1,48 @@
 # Monitored domains — the watch-list. One per line; blank lines and
 # comments (#) are ignored. Fully configurable: add or remove domains here.
 #
-# Prefer domains with reasonably stable address sets. Domains behind heavy
-# geo load-balancing (e.g. google.com) can differ per location and may show up
-# as differences that are benign rather than poisoning.
+# Scope: this is a study of public caching DNS resolvers in SRI LANKA, so the
+# majority of the watch-list is Sri Lankan infrastructure whose compromise would
+# affect Sri Lankan users. A smaller international set is kept deliberately, for
+# two reasons: it exercises delegation through many different top-level domains,
+# and it provides a control group — if a resolver misbehaves only on .lk names,
+# that is a materially different finding from misbehaving everywhere.
+#
+# Every domain below was checked against the authoritative hierarchy AND against
+# all five control resolvers before inclusion. Candidates that diverged, or whose
+# delegation could not be walked, are listed at the foot of this file with the
+# reason, rather than silently dropped.
 
-# google.com and microsoft.com were removed deliberately: both are heavily
-# geo-load-balanced, produced every false positive in the recorded experiment,
-# and their repeated multi-stage verification dominated sweep time.
-cloudflare.com
-nsbm.ac.lk
-
-# --- Sri Lankan domains of national interest ---------------------------
-# Each was vetted against the authoritative hierarchy through all five control
-# resolvers before being added: every control agreed, so a future mismatch is
-# evidence rather than geo-distribution noise.
+# --- Sri Lanka: banking and financial ------------------------------------
 peoplesbank.lk
+sampath.lk
+hnb.lk
+
+# --- Sri Lanka: regulator and government ---------------------------------
 cbsl.gov.lk
 gov.lk
+treasury.gov.lk
+ird.gov.lk
+health.gov.lk
+parliament.lk
+
+# --- Sri Lanka: utilities and public services ----------------------------
+ceb.lk
+police.lk
+
+# --- Sri Lanka: telecommunications ---------------------------------------
 slt.lk
 dialog.lk
 
-# --- deliberately NOT monitored: geo-variable (measured) ----------------
-# These resolve to AWS CloudFront, whose edge set differs per resolver location.
-# Quad9 and AdGuard returned a different (equally genuine) edge set from the
-# authoritative one, which the comparison engine correctly reports as
-# poisoning-shaped. They are false positives, so they are excluded rather than
-# allowed to inflate the anomaly count. Uncomment only to demonstrate that
-# CDN effect deliberately.
-# www.boc.lk
-# boc.lk
-# nic.lk
+# --- Sri Lanka: education -------------------------------------------------
+nsbm.ac.lk
+uom.lk
 
-# --- top-level domain breadth ------------------------------------------
-# Registry and standards-body domains, one per TLD. Each was checked against
-# the authoritative hierarchy before inclusion: stable single or small address
-# sets, no CDN edge variance, sub-2s delegation walks. They widen coverage
-# across the DNS namespace without reintroducing geo-variable false positives.
-# mit.edu was trialled and removed: OpenDNS and Level3 returned a different
-# (equally genuine) Akamai edge than the zone published, which the engine
-# correctly reported as poisoning-shaped. A single-resolver check missed it;
-# candidates must be tested against every control before being added.
+# --- International: top-level domain breadth ------------------------------
+# Registry and standards-body domains, one per TLD. Chosen because they publish
+# small stable address sets and are not behind content delivery networks, so a
+# difference is meaningful rather than geographic noise.
+cloudflare.com
 iana.org
 nist.gov
 who.int
@@ -52,3 +54,19 @@ registry.in
 afnic.fr
 registro.br
 cira.ca
+
+# --- Deliberately NOT monitored, with the measurement that excluded them ---
+#
+# Geo-variable (content delivery networks). These resolve to CDN edges that
+# differ per resolver location, which the comparison engine correctly reports as
+# poisoning-shaped. They are false positives, not findings.
+#   google.com, microsoft.com  — every false positive in the recorded experiment
+#   www.boc.lk, boc.lk, nic.lk — CloudFront; Quad9 and AdGuard returned a
+#                                different edge than the zone published
+#   mit.edu                    — Akamai; OpenDNS and Level3 diverged. A
+#                                single-resolver check had passed it, which is
+#                                why candidates are now tested against every
+#                                control before being added.
+#
+# Delegation could not be walked, or no A records published:
+#   combank.lk, nwsdb.lk, army.lk, pdn.ac.lk

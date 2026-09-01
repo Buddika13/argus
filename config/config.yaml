@@ -58,3 +58,16 @@ metrics:
 
 logging:
   level: INFO
+
+alerting:
+  # A confirmed detection is always stored in the database and shown on the
+  # dashboard. These sinks deliver it to somewhere a person will see it when
+  # nobody is watching the dashboard.
+  enabled: true
+  # Appended one line per confirmed event. Needs no credentials and no network,
+  # so it works during a demonstration with the network down.
+  #   tail -f data/alerts.log
+  log_file: data/alerts.log
+  # Optional. If set, the evidence summary is POSTed as JSON to this URL.
+  # Delivery failures are logged and never interrupt a sweep.
+  webhook_url: ""

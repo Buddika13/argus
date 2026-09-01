@@ -235,6 +235,130 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_all(args: argparse.Namespace) -> int:
+    """Run the whole system end to end and print one consolidated result.
+
+    One command instead of five, for a demonstration or a routine check:
+    configuration, a real monitoring sweep, both detection outcomes, the
+    dashboard, and a summary of what was found and where the evidence lives.
+    """
+    from . import dashboard
+    from .dashboard import shell, verdict
+    from .dashboard.pages import resolver_summaries
+    from .scheduler import Scheduler
+
+    settings = load_settings()
+    _setup_logging(settings.raw["logging"]["level"])
+    step = "[%d/4] "
+
+    print("=" * 74)
+    print("ARGUS - full run")
+    print("=" * 74)
+
+    # 1. configuration -----------------------------------------------------
+    enabled = settings.enabled_resolvers
+    tlds = sorted({d.rsplit(".", 1)[-1] for d in settings.watchlist})
+    print(step % 1 + "Configuration")
+    print("  monitored resolvers : %d  (%s)"
+          % (len(enabled), ", ".join(r.name for r in enabled)))
+    print("  watch-list domains  : %d across %d TLDs (%s)"
+          % (len(settings.watchlist), len(tlds), ", ".join(tlds)))
+    print("  sweep interval      : %ds" % settings.schedule["interval_seconds"])
+
+    # 2. a real sweep ------------------------------------------------------
+    print()
+    print(step % 2 + "Monitoring sweep (this queries every resolver; please wait)")
+    with _SweepLock(settings.db_path) as lock:
+        if not lock.acquired:
+            print("  another sweep is already running - skipping this step")
+            summary = None
+        else:
+            storage = Storage(settings.db_path)
+            try:
+                started = time.time()
+                summary = Scheduler(settings, storage).run_once()
+                elapsed = time.time() - started
+            finally:
+                storage.close()
+            print("  %d queries in %.1fs - %d anomalies, %d alerts, %d failures"
+                  % (summary["queries"], elapsed, summary["anomalies"],
+                     summary["alerts"], summary["failures"]))
+            if elapsed > settings.schedule["interval_seconds"]:
+                print("  NOTE: the sweep took longer than the configured interval,"
+                      " so monitoring\n        cannot actually run that often.")
+
+    # 3. detection check ---------------------------------------------------
+    print()
+    print(step % 3 + "Detection check (comparison engine, nothing stored)")
+    if not args.skip_checks:
+        probe_domain = settings.watchlist[0] if settings.watchlist else "example.com"
+        for label, fake in (("a forged answer   ", "192.0.2.123"),
+                            ("the real answer   ", None)):
+            sim = argparse.Namespace(domain=probe_domain, rtype="A", ttl=300,
+                                     resolver_ip="192.0.2.1", verify=False,
+                                     fake_ip=fake or "")
+            if fake is None:
+                from .verifier import AuthoritativeVerifier
+                truth = AuthoritativeVerifier(timeout=5.0).resolve(probe_domain, "A")
+                if not truth.records:
+                    print("  %s could not establish ground truth - skipped" % label)
+                    continue
+                sim.fake_ip = ",".join(sorted(truth.records))
+            import io
+            import contextlib
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                cmd_simulate(sim)
+            result = [ln.split(":", 1)[1].strip() for ln in
+                      buffer.getvalue().splitlines() if ln.strip().startswith("RESULT")]
+            print("  %s -> %s" % (label, result[0] if result else "?"))
+    else:
+        print("  skipped (--skip-checks)")
+
+    # 4. dashboard ---------------------------------------------------------
+    print()
+    print(step % 4 + "Dashboard")
+    storage = Storage(settings.db_path)
+    try:
+        out = dashboard.generate(storage, settings.dashboard_path, settings.vantage)
+        rows = resolver_summaries(storage)
+        counts = storage.table_counts()
+    finally:
+        storage.close()
+    print("  written to %s" % out)
+    if not args.no_open:
+        import webbrowser
+        webbrowser.open(out.as_uri())
+        print("  opened in your browser")
+
+    # final summary --------------------------------------------------------
+    print()
+    print("=" * 74)
+    print("RESULT")
+    print("=" * 74)
+    for row in rows:
+        # Only currently enabled resolvers. Disabled ones keep their last health
+        # row in the database, and showing that would imply they are monitored.
+        if row["status"] == shell.NO_DATA or not row["enabled"]:
+            continue
+        print("  %-12s %-16s %-28s availability %s   latency %s"
+              % (row["name"], row["ip"], row["status"],
+                 ("%.0f%%" % row["availability"]) if row["availability"] is not None
+                 else "-",
+                 ("%.0f ms" % row["latency"]) if row["latency"] is not None else "-"))
+    print()
+    print("  possible cache-poisoning events : %d" % counts.get("alerts", 0))
+    print("  anomalies recorded              : %d" % counts.get("anomalies", 0))
+    print("  measurements stored             : %d" % counts.get("query_results", 0))
+    print()
+    print("  verdicts reported: %s, %s, %s"
+          % (verdict.NO_POISONING, verdict.POSSIBLE, verdict.INCONCLUSIVE))
+    print("  evidence          : python scripts/show_evidence.py")
+    print("  live dashboard    : python -m argus dashboard")
+    print("=" * 74)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     import webbrowser
     from . import dashboard
@@ -275,6 +399,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="sweep even if another appears to be running")
     p_once.set_defaults(func=cmd_run_once)
     sub.add_parser("serve", help="run continuous monitoring").set_defaults(func=cmd_serve)
+    p_all = sub.add_parser(
+        "all", help="run everything: sweep, detection check, dashboard, summary")
+    p_all.add_argument("--no-open", action="store_true",
+                       help="write the dashboard but do not open a browser")
+    p_all.add_argument("--skip-checks", action="store_true",
+                       help="skip the detection check step")
+    p_all.set_defaults(func=cmd_all)
+
     p_sim = sub.add_parser(
         "simulate",
         help="feed a known-incorrect answer to the comparison engine (no network "

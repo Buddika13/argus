@@ -375,7 +375,9 @@ attacked.
 - ✅ A packaged **lab-attacker** harness for reproducible true-positive
   (detection) experiments — `scripts/demo_hijack.py` runs a poisoned resolver on
   loopback and shows the honest and hijacked verdicts side by side.
-- ⬜ Alerting integrations (email/webhook).
+- ✅ Alerting integrations — a confirmed detection is appended to
+  `data/alerts.log` and, if `alerting.webhook_url` is set, POSTed as JSON.
+  Delivery failures are logged and never interrupt a sweep.
 
 ## 27. Research references
 
