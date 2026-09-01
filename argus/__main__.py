@@ -31,7 +31,10 @@ Terminology used throughout the codebase and the documentation:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
+from pathlib import Path
 
 from . import __version__
 from .config import load_settings
@@ -77,15 +80,63 @@ def _setup_logging(level: str = "INFO") -> None:
     )
 
 
-def cmd_run_once(_args: argparse.Namespace) -> int:
+class _SweepLock:
+    """Prevent two sweeps running against the same database at once.
+
+    Overlapping sweeps contend for the SQLite write lock and query the same
+    resolvers simultaneously. Measured cost of one accidental overlap: a sweep
+    that normally takes 99s took 2323s. They also corrupt the timing data the
+    evaluation depends on, since latency then reflects our own contention.
+
+    A stale lock (left by a crash) is detected by age and taken over.
+    """
+
+    STALE_AFTER = 3600.0
+
+    def __init__(self, db_path) -> None:
+        self.path = Path(str(db_path) + ".sweep.lock")
+        self.acquired = False
+
+    def __enter__(self) -> "_SweepLock":
+        try:
+            if self.path.exists() and \
+                    (time.time() - self.path.stat().st_mtime) > self.STALE_AFTER:
+                self.path.unlink()          # left behind by a crashed sweep
+            handle = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(handle, str(os.getpid()).encode())
+            os.close(handle)
+            self.acquired = True
+        except FileExistsError:
+            self.acquired = False
+        except OSError:
+            self.acquired = True            # never block monitoring on the lock itself
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.acquired:
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+
+
+def cmd_run_once(args: argparse.Namespace) -> int:
     from .scheduler import Scheduler
     settings = load_settings()
     _setup_logging(settings.raw["logging"]["level"])
-    storage = Storage(settings.db_path)
-    try:
-        summary = Scheduler(settings, storage).run_once()
-    finally:
-        storage.close()
+
+    with _SweepLock(settings.db_path) as lock:
+        if not lock.acquired and not getattr(args, "force", False):
+            print("Another sweep is already running against this database.")
+            print("Overlapping sweeps contend for the SQLite write lock and skew")
+            print("every latency measurement. Wait for it to finish, or pass")
+            print("--force if you are certain no other sweep is active.")
+            return 1
+        storage = Storage(settings.db_path)
+        try:
+            summary = Scheduler(settings, storage).run_once()
+        finally:
+            storage.close()
     print("Sweep summary:", summary)
     return 0
 
@@ -94,12 +145,19 @@ def cmd_serve(_args: argparse.Namespace) -> int:
     from .scheduler import Scheduler
     settings = load_settings()
     _setup_logging(settings.raw["logging"]["level"])
-    storage = Storage(settings.db_path)
-    print(f"Monitoring every {settings.schedule['interval_seconds']}s. Press Ctrl+C to stop.")
-    try:
-        Scheduler(settings, storage).run_forever()
-    finally:
-        storage.close()
+    with _SweepLock(settings.db_path) as lock:
+        if not lock.acquired:
+            print("Another sweep or serve process is already running against this")
+            print("database. Stop it first, or the two will contend for the write")
+            print("lock and distort every latency measurement.")
+            return 1
+        storage = Storage(settings.db_path)
+        print(f"Monitoring every {settings.schedule['interval_seconds']}s. "
+              "Press Ctrl+C to stop.")
+        try:
+            Scheduler(settings, storage).run_forever()
+        finally:
+            storage.close()
     return 0
 
 
@@ -212,7 +270,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="show configuration and readiness")
     p_status.set_defaults(func=cmd_status)
 
-    sub.add_parser("run-once", help="run a single monitoring sweep").set_defaults(func=cmd_run_once)
+    p_once = sub.add_parser("run-once", help="run a single monitoring sweep")
+    p_once.add_argument("--force", action="store_true",
+                        help="sweep even if another appears to be running")
+    p_once.set_defaults(func=cmd_run_once)
     sub.add_parser("serve", help="run continuous monitoring").set_defaults(func=cmd_serve)
     p_sim = sub.add_parser(
         "simulate",
