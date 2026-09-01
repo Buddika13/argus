@@ -116,61 +116,6 @@ def sparkline(values: list) -> str:
             'stroke-width="1.5"/></svg>' % (w, h, w, h, pts))
 
 
-def heartbeat(history, limit: int = 30) -> str:
-    """Uptime-style bars, one per recorded check, oldest on the left.
-
-    Each bar is coloured from that check's own availability, so the strip reads
-    as a history rather than a decoration: a resolver that failed three sweeps
-    ago still shows those three bars.
-    """
-    values = [h["availability_pct"] for h in reversed(list(history))
-              if h["availability_pct"] is not None][-limit:]
-    if not values:
-        return "<div class='beat empty'><span class='muted small'>no checks yet</span></div>"
-    bars = ""
-    for value in values:
-        tone = "ok" if value >= 100 else "warn" if value > 0 else "bad"
-        bars += ("<i class='" + tone + "' title='" + ("%.0f%% available" % value)
-                 + "'></i>")
-    return ("<div class='beat'>" + bars + "</div>"
-            "<div class='beatfoot'><span>" + str(len(values)) +
-            " checks</span><span>now</span></div>")
-
-
-def area_chart(history, limit: int = 40, height: int = 62) -> str:
-    """Response time over the recorded window, as a filled area with an
-    emphasised final point. Pure SVG, so it prints and needs no script."""
-    points = [h["avg_latency_ms"] for h in reversed(list(history))
-              if h["avg_latency_ms"] is not None][-limit:]
-    if len(points) < 2:
-        return "<p class='muted small'>Not enough history to plot yet.</p>"
-
-    width = 460.0
-    lo, hi = min(points), max(points)
-    span = (hi - lo) or 1.0
-    pad = span * 0.15
-    lo, hi = lo - pad, hi + pad
-    span = hi - lo
-    step = width / (len(points) - 1)
-
-    def y(value):
-        return height - (value - lo) / span * (height - 6) - 3
-
-    coords = [(i * step, y(v)) for i, v in enumerate(points)]
-    line = " ".join("%.1f,%.1f" % c for c in coords)
-    area = ("0,%.1f " % height) + line + (" %.1f,%.1f" % (width, height))
-    last = coords[-1]
-    return (
-        '<svg class="chart" viewBox="0 0 %.0f %d" preserveAspectRatio="none" '
-        'role="img" aria-label="response time history">'
-        '<polygon points="%s" fill="currentColor" opacity=".13"/>'
-        '<polyline points="%s" fill="none" stroke="currentColor" '
-        'stroke-width="1.8" vector-effect="non-scaling-stroke"/>'
-        '<circle cx="%.1f" cy="%.1f" r="3" fill="currentColor"/></svg>'
-        '<div class="chartfoot"><span>%.0f ms</span><span>%.0f ms</span></div>'
-        % (width, height, area, line, last[0], last[1], min(points), max(points)))
-
-
 def resolver_status(health) -> str:
     """Transparent status derived from stored metrics; never an opaque score.
 
@@ -221,31 +166,12 @@ def note(text: str, tone: str = "info") -> str:
 
 # -- page chrome ------------------------------------------------------------
 
-NAV_ICONS = {
-    "overview": "M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6V11h-6v9zm0-16v5h6V4h-6z",
-    "resolvers": "M4 6h16M4 12h16M4 18h16",
-    "poisoning": "M12 3l9 16H3l9-16zm0 6v5m0 3v.5",
-    "queries": "M11 4a7 7 0 100 14 7 7 0 000-14zm10 17l-5.2-5.2",
-    "anomalies": "M3 12h4l3 7 4-16 3 9h4",
-    "verification": "M4 12l5 5L20 6",
-    "reports": "M6 3h9l5 5v13H6zM15 3v5h5M9 13h7M9 17h7",
-}
-
-
-def _icon(key: str) -> str:
-    path = NAV_ICONS.get(key, "")
-    return ('<svg class="nico" viewBox="0 0 24 24" fill="none" '
-            'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
-            'stroke-linejoin="round" aria-hidden="true"><path d="' + path
-            + '"/></svg>')
-
-
 def _nav(active: str, live: bool) -> str:
     out = ""
     for key, _file, _path, title, _blurb in PAGES:
         cls = "navlink active" if key == active else "navlink"
         out += ('<a class="' + cls + '" href="' + link(key, live) + '">'
-                + _icon(key) + "<span>" + e(title) + "</span></a>")
+                + e(title) + "</a>")
     return out
 
 
@@ -418,47 +344,6 @@ padding:15px 17px;box-shadow:var(--shadow)}
 letter-spacing:.06em;color:var(--muted)}
 footer{color:var(--muted);font-size:11.5px;margin-top:32px;border-top:1px solid var(--line);
 padding-top:14px;line-height:1.7;max-width:80ch}
-/* navigation icons */
-.nico{width:15px;height:15px;flex:none;opacity:.8}
-.navlink{display:flex;align-items:center;gap:9px}
-.navlink.active .nico{opacity:1}
-
-/* heartbeat bars */
-.beat{display:flex;gap:3px;align-items:flex-end;height:34px}
-.beat i{flex:1 1 4px;min-width:3px;max-width:9px;height:100%;border-radius:2px;
-background:var(--grey);opacity:.35}
-.beat i.ok{background:var(--ok);opacity:1}
-.beat i.warn{background:var(--warn);opacity:1}
-.beat i.bad{background:var(--bad);opacity:1}
-.beat.empty{align-items:center;justify-content:center;border:1px dashed var(--line);
-border-radius:8px}
-.beatfoot,.chartfoot{display:flex;justify-content:space-between;margin-top:5px;
-font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
-
-/* response-time chart */
-.chart{width:100%;height:62px;display:block;color:var(--accent)}
-
-/* status hero */
-.hero{display:flex;flex-wrap:wrap;align-items:center;gap:16px;background:var(--panel);
-border:1px solid var(--line);border-radius:12px;padding:16px 18px;
-box-shadow:var(--shadow);margin-bottom:14px}
-.hero .who{min-width:180px}
-.hero .who b{display:block;font-size:18px;letter-spacing:-.01em}
-.hero .who span{color:var(--muted);font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
-.hero .pill{margin-left:auto;font-size:12px;font-weight:750;letter-spacing:.05em;
-padding:7px 15px;border-radius:999px}
-.hero .pill.ok{background:var(--okbg);color:var(--ok)}
-.hero .pill.warn{background:var(--warnbg);color:var(--warn)}
-.hero .pill.bad{background:var(--badbg);color:var(--bad)}
-.hero .pill.muted{background:var(--greybg);color:var(--grey)}
-.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));
-gap:12px;margin-bottom:14px}
-.metric{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-padding:12px 14px;box-shadow:var(--shadow)}
-.metric .l{font-size:10px;text-transform:uppercase;letter-spacing:.06em;
-color:var(--muted);font-weight:650}
-.metric .v{font-size:21px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}
-
 @media print{.rail{display:none}.topbar{position:static}
 body{background:#fff}.tablewrap,.card,.panel{box-shadow:none}}
 @media(max-width:820px){.layout{flex-direction:column}
