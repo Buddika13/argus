@@ -13,9 +13,9 @@ from __future__ import annotations
 import json
 
 from . import verdict
-from .shell import (HEALTHY, NO_DATA, STATUS_SEVERITY, badge, e, link, ms, note,
-                    pct, rate, records, resolver_status, sparkline, status_tone,
-                    table, ts)
+from .shell import (HEALTHY, NO_DATA, STATUS_SEVERITY, area_chart, badge, e,
+                    heartbeat, link, ms, note, pct, rate, records,
+                    resolver_status, sparkline, status_tone, table, ts)
 
 PAGE_SIZE = 25
 
@@ -199,7 +199,30 @@ def resolvers(storage, live: bool, selected: str = "") -> str:
         if match is None:
             body += note("No resolver named <b>" + e(selected) + "</b> is configured.", "warn")
             return body
-        body += "<h2>Detail &mdash; " + e(selected) + "</h2><div class='grid2'>"
+        history = storage.metric_history(selected, limit=40)
+        tone = status_tone(match["status"])
+        body += ("<h2>Detail &mdash; " + e(selected) + "</h2>"
+                 "<div class='hero'><div class='who'><b>" + e(selected) + "</b>"
+                 "<span>" + e(match["ip"]) + "</span></div>"
+                 "<div class='pill " + tone + "'>" + e(match["status"]) + "</div>"
+                 "</div>")
+        body += ("<div class='metrics'>"
+                 "<div class='metric'><div class='l'>Availability</div>"
+                 "<div class='v'>" + pct(match["availability"]) + "</div></div>"
+                 "<div class='metric'><div class='l'>Avg response</div>"
+                 "<div class='v'>" + ms(match["latency"]) + "</div></div>"
+                 "<div class='metric'><div class='l'>Correctness</div>"
+                 "<div class='v'>" + rate(match["correctness"]) + "</div></div>"
+                 "<div class='metric'><div class='l'>Checks stored</div>"
+                 "<div class='v'>" + str(len(history)) + "</div></div>"
+                 "<div class='metric'><div class='l'>Last check</div>"
+                 "<div class='v' style='font-size:13px'>" + ts(match["last"])
+                 + "</div></div></div>")
+        body += ("<div class='panel' style='margin-bottom:14px'>"
+                 "<h3>Check history</h3>" + heartbeat(history) + "</div>")
+        body += ("<div class='panel' style='margin-bottom:14px'>"
+                 "<h3>Response time</h3>" + area_chart(history) + "</div>")
+        body += "<div class='grid2'>"
         body += ("<div class='panel'><h3>Health metrics</h3><dl class='kv'>"
                  "<dt>Address</dt><dd class='mono'>" + e(match["ip"]) + "</dd>"
                  "<dt>Role</dt><dd>" + e(match["role"]) + "</dd>"
