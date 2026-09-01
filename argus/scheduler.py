@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from .comparison import compare
@@ -82,14 +83,38 @@ class Scheduler:
             self.storage.upsert_domain(domain)
 
         # 1. ground truth once per (domain, rtype), shared across all resolvers.
+        #
+        # The walks are independent of one another and touch no database, so they
+        # run concurrently at the configured width. Every walk still queries the
+        # root and TLD servers exactly as before; only the waiting overlaps.
+        # Results are collected first and written on this thread afterwards,
+        # because the SQLite connection belongs to it.
+        wanted = [(domain, rtype) for domain in domains for rtype in rtypes]
+        width = max(1, int(self.settings.schedule.get("concurrency", 1) or 1))
+
         truth, auth_ids = {}, {}
-        for domain in domains:
-            for rtype in rtypes:
-                answer = self.verifier.resolve(domain, rtype)
-                truth[(domain, rtype)] = answer
-                auth_ids[(domain, rtype)] = self.storage.insert_authoritative_result(answer)
-                if answer.error:
-                    log.warning("verification failed for %s/%s: %s", domain, rtype, answer.error)
+        if width > 1 and len(wanted) > 1:
+            with ThreadPoolExecutor(max_workers=min(width, len(wanted))) as pool:
+                futures = {pool.submit(self.verifier.resolve, domain, rtype):
+                           (domain, rtype) for domain, rtype in wanted}
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        truth[key] = future.result()
+                    except Exception:  # noqa: BLE001 - one bad walk must not stop the sweep
+                        log.exception("ground-truth walk failed: %s/%s", *key)
+        else:
+            for domain, rtype in wanted:
+                truth[(domain, rtype)] = self.verifier.resolve(domain, rtype)
+
+        for key in wanted:
+            answer = truth.get(key)
+            if answer is None:                     # walk raised; nothing to compare against
+                continue
+            auth_ids[key] = self.storage.insert_authoritative_result(answer)
+            if answer.error:
+                log.warning("verification failed for %s/%s: %s", key[0], key[1],
+                            answer.error)
 
         # 2. probe every resolver.
         started = time.time()
@@ -101,6 +126,8 @@ class Scheduler:
                 if self.dnssec else None
             for domain in domains:
                 for rtype in rtypes:
+                    if (domain, rtype) not in truth:
+                        continue          # ground-truth walk failed; nothing to compare
                     try:
                         self._pace()
                         direct = self.probe.query(resolver, domain, rtype)
