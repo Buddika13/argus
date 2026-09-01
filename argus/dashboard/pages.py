@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 
 from . import verdict
-from .shell import (badge, e, link, ms, note, pct, rate, records, resolver_status,
-                    sparkline, status_tone, table, ts)
+from .shell import (HEALTHY, NO_DATA, STATUS_SEVERITY, badge, e, link, ms, note,
+                    pct, rate, records, resolver_status, sparkline, status_tone,
+                    table, ts)
 
 PAGE_SIZE = 25
 
@@ -45,8 +46,7 @@ def resolver_summaries(storage) -> list[dict]:
             "spark": sparkline([h["availability_pct"] for h in reversed(history)
                                 if h["availability_pct"] is not None]),
         })
-    order = {"ALERT": 0, "ANOMALY": 1, "DEGRADED": 2, "HEALTHY": 3, "NO DATA": 8}
-    out.sort(key=lambda x: (order.get(x["status"], 9), x["name"]))
+    out.sort(key=lambda x: (STATUS_SEVERITY.get(x["status"], 9), x["name"]))
     return out
 
 
@@ -55,6 +55,33 @@ def _evidence(raw):
         return json.loads(raw) if raw else {}
     except (TypeError, ValueError):
         return {}
+
+
+def dig_commands(domain: str, rtype: str, resolver_ip: str = "",
+                 port: int = 53) -> str:
+    """The two dig commands that reproduce a finding independently.
+
+    Argus resolves natively rather than shelling out to dig, so these are shown
+    for verification rather than executed. Note that `dig +trace` asks the local
+    system resolver for out-of-bailiwick glue, whereas the trusted path here
+    sub-walks from the root for it -- so +trace is the closest standard
+    equivalent, not an identical procedure.
+    """
+    at = ("@" + resolver_ip + (" -p " + str(port) if port and port != 53 else "")
+          ) if resolver_ip else "@<resolver>"
+    untrusted = "dig +short " + at + " " + domain + " " + rtype
+    trusted = "dig +trace " + domain + " " + rtype
+    return ("<div class='panel' style='margin-top:14px'><h3>Reproduce this "
+            "independently</h3>"
+            "<dl class='kv'>"
+            "<dt>Untrusted path</dt><dd class='mono'>" + e(untrusted) + "</dd>"
+            "<dt>Trusted path</dt><dd class='mono'>" + e(trusted) + "</dd>"
+            "</dl>"
+            "<p class='small muted' style='margin:9px 0 0'>Argus resolves "
+            "directly rather than calling dig; these commands let the same "
+            "comparison be checked with standard tools. <code>dig +trace</code> "
+            "resolves missing glue through the local system resolver, while the "
+            "trusted path here sub-walks from the root for it.</p></div>")
 
 
 def _card(tone, number, label) -> str:
@@ -88,8 +115,9 @@ def _verdict_banner(alerts: int, anomalies: int, has_data: bool) -> str:
 def overview(storage, live: bool) -> str:
     rows = resolver_summaries(storage)
     counts = storage.table_counts()
-    healthy = sum(1 for x in rows if x["status"] == "HEALTHY")
-    unhealthy = sum(1 for x in rows if x["status"] in ("ALERT", "ANOMALY", "DEGRADED"))
+    healthy = sum(1 for x in rows if x["status"] == HEALTHY)
+    unhealthy = sum(1 for x in rows
+                    if x["status"] not in (HEALTHY, NO_DATA))
     alerts = counts.get("alerts", 0)
     anomalies = counts.get("anomalies", 0)
     has_data = counts.get("query_results", 0) > 0
@@ -125,7 +153,7 @@ def overview(storage, live: bool) -> str:
     body += "<h2>Resolver status summary</h2>"
     rowsout = ""
     for x in rows:
-        dim = " class='dim'" if x["status"] == "NO DATA" else ""
+        dim = " class='dim'" if x["status"] == NO_DATA else ""
         rowsout += ("<tr" + dim + "><td><b>" + e(x["name"]) + "</b></td>"
                     "<td class='mono'>" + e(x["ip"]) + "</td>"
                     "<td>" + badge(x["status"], status_tone(x["status"])) + "</td>"
@@ -144,7 +172,7 @@ def resolvers(storage, live: bool, selected: str = "") -> str:
     body = ""
     rowsout = ""
     for x in rows:
-        dim = " dim" if x["status"] == "NO DATA" else ""
+        dim = " dim" if x["status"] == NO_DATA else ""
         href = link("resolvers", live, "?resolver=" + x["name"])
         rowsout += ("<tr class='" + dim.strip() + "'>"
                     "<td><a href='" + href + "'><b>" + e(x["name"]) + "</b></a> "
@@ -162,9 +190,9 @@ def resolvers(storage, live: bool, selected: str = "") -> str:
                    "Correctness", "Freshness", "DNSSEC", "Trend", "Last checked"],
                   rowsout, 10)
     body += ("<p class='small muted'>Select a resolver name for its detail. Status "
-             "is derived from stored metrics: ALERT if any possible poisoning, "
-             "ANOMALY if any anomaly, DEGRADED if availability &lt; 100% or "
-             "freshness degraded, otherwise HEALTHY.</p>")
+             "is derived from stored metrics, most severe first: POSSIBLE DNS CACHE "
+             "POISONING, UNREACHABLE, TIMEOUT, ERROR, SUSPICIOUS, WARNING, "
+             "HEALTHY. Every label maps to one raw metric.</p>")
 
     if selected:
         match = next((x for x in rows if x["name"] == selected), None)
@@ -274,6 +302,12 @@ def poisoning(storage, live: bool) -> str:
                  "<dt>Also matched</dt><dd class='mono'>" + field("matched") + "</dd>"
                  "<dt>Missing from answer</dt><dd class='mono'>"
                  + field("missing") + "</dd>"
+                 "<dt>Authoritative server</dt><dd class='mono small'>"
+                 + field("auth_servers") + "</dd>"
+                 "<dt>Top-level domain</dt><dd class='mono'>"
+                 + field("tld") + "</dd>"
+                 "<dt>Delegation walked</dt><dd class='mono small'>"
+                 + field("auth_chain") + "</dd>"
                  "<dt>RCODE (mon / auth)</dt><dd class='mono'>"
                  + field("monitored_rcode") + " / " + field("auth_rcode") + "</dd>"
                  "<dt>TTL (mon / auth)</dt><dd class='mono'>" + ttl_line + "</dd>"
@@ -327,6 +361,8 @@ def poisoning(storage, live: bool) -> str:
                  + str(stage5.get("repetitions", "—")) + " repeats</li>"
                  "<li><b>Decision</b>" + e(ev.get("decision") or "—") + "</li>"
                  "</ul></div>")
+        body += dig_commands(a["domain"], a["rtype"],
+                             (m["resolver_ip"] if m is not None else "") or "")
     return body
 
 
@@ -580,6 +616,8 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
              + badge(result["classification"],
                      verdict.tone_of(result["classification"])) + "</dd>"
              "<dt>Reason</dt><dd>" + e(result["reason"]) + "</dd></dl></div>")
+
+    body += dig_commands(result["domain"], result["rtype"], result["resolver_ip"])
 
     final = result["verdict"]
     tone = verdict.verdict_tone(final)

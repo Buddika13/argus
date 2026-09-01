@@ -190,6 +190,26 @@ request, which is also what makes filtering, paging and live verification work.
 Every page is self-contained: no script, no external asset. Clear "No data
 available" state. *Tested (14 dashboard tests).*
 
+## 16a. Terminology
+
+Used consistently in the code, the dashboard and this document. The distinction
+between a *recursive resolver* and an *authoritative server* is the one that
+matters most: they sit on opposite sides of the comparison.
+
+| Term | Meaning |
+|---|---|
+| **Public caching DNS resolver** | a publicly reachable recursive resolver that caches answers for its users |
+| **Monitored resolver** | the caching resolver currently under test (the untrusted side) |
+| **Trusted resolution path** | resolution Argus performs itself, walking Root → TLD → authoritative |
+| **Authoritative DNS server** | the server authoritative for the queried zone; the source of ground truth |
+| **Root DNS server** | root infrastructure. Returns TLD **delegation**, never the final address |
+| **TLD name server** | delegates within a top-level domain (`.lk`, `.com`) |
+| **Trusted reference resolver** | Google, Cloudflare, Quad9, OpenDNS, Verisign — **recursive resolvers**, used only as a corroborating cross-check. They are *not* authoritative servers |
+| **Possible DNS cache poisoning** | a mismatch that survived every independent check. Never a claim of proven poisoning |
+
+Argus itself is a **monitoring system for caching resolvers**. It is not a
+caching server: it holds no cache, answers no queries and has no clients.
+
 ## 17. Technology stack
 
 - **Language:** Python 3.10+ (developed on 3.12)

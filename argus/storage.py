@@ -81,7 +81,9 @@ CREATE TABLE IF NOT EXISTS authoritative_results (
     records     TEXT,
     ttl         INTEGER,
     rcode       TEXT,
-    chain       TEXT
+    chain       TEXT,
+    servers     TEXT,        -- authoritative name servers that answered
+    tld         TEXT         -- top-level domain the delegation passed through
 );
 CREATE INDEX IF NOT EXISTS idx_ar_lookup ON authoritative_results (domain, rtype);
 
@@ -181,6 +183,9 @@ CREATE VIEW IF NOT EXISTS monitoring_events AS
         q.response_time_ms         AS response_time_ms,
         a.rcode                    AS authoritative_rcode,
         a.records                  AS authoritative_records,
+        a.servers                  AS authoritative_servers,
+        a.chain                    AS delegation_chain,
+        a.tld                      AS tld,
         c.classification           AS comparison_classification,
         c.reason                   AS verification_result,
         c.is_anomaly               AS anomaly_status
@@ -192,6 +197,12 @@ CREATE VIEW IF NOT EXISTS monitoring_events AS
 # Tables surfaced by the `status` command / table_counts().
 _TABLES = ("resolvers", "domains", "query_results", "authoritative_results",
            "comparisons", "health_metrics", "anomalies", "alerts", "dnssec_status")
+
+
+def _tld(domain: str) -> str:
+    """The top-level domain of a name, e.g. peoplesbank.lk -> lk."""
+    parts = (domain or "").rstrip(".").split(".")
+    return parts[-1].lower() if len(parts) > 1 else ""
 
 
 def _join(records) -> str:
@@ -212,7 +223,26 @@ class Storage:
     def init_schema(self) -> None:
         """Create tables/indexes/view if absent. Idempotent; never destructive."""
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created.
+
+        Only ever ADDs columns and rebuilds the read-only view, so existing rows
+        are preserved untouched; older rows simply carry NULL in the new columns.
+        """
+        existing = {row[1] for row in
+                    self._conn.execute("PRAGMA table_info(authoritative_results)")}
+        for column, decl in (("servers", "TEXT"), ("tld", "TEXT")):
+            if column not in existing:
+                self._conn.execute(
+                    "ALTER TABLE authoritative_results ADD COLUMN %s %s"
+                    % (column, decl))
+        # A view is a stored query, not data: dropping and recreating it is safe
+        # and is the only way to pick up columns added above.
+        self._conn.execute("DROP VIEW IF EXISTS monitoring_events")
+        self._conn.executescript(SCHEMA)
 
     # -- reference data ---------------------------------------------------
     def upsert_resolver(self, r: MonitoredResolver) -> None:
@@ -246,10 +276,11 @@ class Storage:
 
     def insert_authoritative_result(self, a: AuthoritativeAnswer) -> int:
         cur = self._conn.execute(
-            "INSERT INTO authoritative_results (observed_at, domain, rtype, records, ttl, rcode, chain) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO authoritative_results (observed_at, domain, rtype, records,"
+            " ttl, rcode, chain, servers, tld) VALUES (?,?,?,?,?,?,?,?,?)",
             (a.observed_at, a.domain, a.rtype, _join(a.records), a.ttl, a.rcode,
-             " | ".join(a.chain)),
+             " | ".join(a.chain), ",".join(a.authoritative_servers),
+             _tld(a.domain)),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -434,6 +465,7 @@ class Storage:
             "       q.response_time_ms, q.authenticated,"
             "       a.records AS auth_records, a.ttl AS auth_ttl,"
             "       a.rcode AS auth_rcode, a.chain AS auth_chain,"
+            "       a.servers AS auth_servers, a.tld AS tld,"
             "       c.matched, c.unpublished, c.missing,"
             "       c.ttl_ratio, c.ttl_inflated"
             " FROM alerts al"

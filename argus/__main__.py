@@ -1,12 +1,31 @@
 """Argus command-line interface.
 
-    python -m argus status      show configuration + database + module readiness
-    python -m argus run-once    run one sweep            (implemented in a later step)
-    python -m argus serve       run continuously         (implemented in a later step)
-    python -m argus report      build the HTML dashboard (implemented in a later step)
+    python -m argus status      configuration, database and module readiness
+    python -m argus run-once    one monitoring sweep of every monitored resolver
+    python -m argus serve       continuous monitoring at the configured interval
+    python -m argus simulate    feed a known-incorrect answer to the comparison
+                                engine (no resolver queried, nothing stored)
+    python -m argus report      write the dashboard as static pages
+    python -m argus dashboard   serve the dashboard live
 
-Only `status` is functional in the foundation; the others confirm the wiring is
-in place and report that their pipeline module is not yet implemented.
+Terminology used throughout the codebase and the documentation:
+
+    Public caching DNS resolver   a publicly reachable recursive resolver that
+                                  caches answers for its users
+    Monitored resolver            the caching resolver currently under test
+    Trusted resolution path       resolution performed independently by walking
+                                  Root -> TLD -> authoritative ourselves
+    Authoritative DNS server      the server authoritative for the queried zone
+    Root DNS server               root-level infrastructure; it returns TLD
+                                  delegation, never the final address
+    TLD name server               the server responsible for delegating within
+                                  a top-level domain
+    Trusted reference resolver    a public recursive resolver (Google,
+                                  Cloudflare, Quad9, OpenDNS, Verisign) used as
+                                  a corroborating cross-check. These are
+                                  recursive resolvers, NOT authoritative servers
+    Possible DNS cache poisoning  a mismatch that survived every independent
+                                  check; never a claim of proven poisoning
 """
 
 from __future__ import annotations
@@ -84,6 +103,80 @@ def cmd_serve(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_simulate(args: argparse.Namespace) -> int:
+    """Feed a known-incorrect answer to the comparison engine and show the result.
+
+    Ground truth is resolved for real through the DNS hierarchy; only the
+    resolver's side is fabricated. That makes the detection path reproducible
+    without touching any real resolver, and without an attacker.
+
+    Nothing is written to the database: the research data must contain only real
+    measurements, so a simulated event would contaminate the evaluation.
+    """
+    from .comparison import compare
+    from .models import DirectAnswer, MonitoredResolver
+    from .probe import ResolverProbe
+    from .verification import AnomalyVerifier
+    from .verifier import AuthoritativeVerifier
+
+    settings = load_settings()
+    domain, rtype = args.domain.rstrip("."), args.rtype.upper()
+
+    walker = AuthoritativeVerifier(timeout=5.0)
+    truth = walker.resolve(domain, rtype)
+
+    fake = frozenset(a.strip() for a in args.fake_ip.split(",") if a.strip())
+    injected = DirectAnswer(
+        resolver="simulated-resolver", domain=domain, rtype=rtype,
+        resolver_ip=args.resolver_ip, records=fake, min_ttl=args.ttl,
+        rcode="NOERROR", latency_ms=1.0, authenticated=False)
+
+    print("=" * 74)
+    print("ARGUS SIMULATION - a known-incorrect answer through the real engine")
+    print("=" * 74)
+    print("  domain              : %s %s" % (domain, rtype))
+    print("  simulated cached IPs: %s" % ", ".join(sorted(fake)))
+    print("  trusted answer      : %s" % (", ".join(sorted(truth.records)) or "(none)"))
+    print("  delegation walked   : %s" % (" | ".join(truth.chain) or "(direct)"))
+    print("  authoritative server: %s" % (", ".join(truth.authoritative_servers) or "?"))
+    print()
+
+    result = compare(injected, truth, max_ttl_ratio=settings.freshness["max_ttl_ratio"])
+    print("  stage 1 comparison  : %s" % result.classification.value)
+    print("  reason              : %s" % result.reason)
+    print("  unpublished by zone : %s"
+          % (", ".join(sorted(result.unpublished)) or "(none)"))
+
+    final = result.classification
+    if result.classification.needs_review and args.verify:
+        controls = [r for r in settings.resolvers if r.role == "control"]
+        target = MonitoredResolver("simulated-resolver",
+                                   args.resolver_ip, role="isp")
+        outcome = AnomalyVerifier(ResolverProbe(timeout=5.0, retries=1), walker,
+                                  controls=controls, repetitions=1)
+        # The simulated resolver cannot be re-queried, so persistence is asserted
+        # from the injected answer rather than measured. Stated, not hidden.
+        verified = outcome.verify(target, injected, truth, result)
+        final = verified.classification
+        print("  final classification: %s" % final.value)
+        print("  reason              : %s" % verified.reason)
+        print()
+        print("  NOTE: the simulated resolver does not exist on the network, so"
+              " stages 3\n        and 5 could not query it. Treat this as a check"
+              " of the comparison\n        engine, not of the full pipeline. Use"
+              " scripts/demo_hijack.py for\n        an end-to-end test against a"
+              " real (loopback) resolver.")
+
+    print()
+    print("  RESULT              : %s" % (
+        "POSSIBLE_CACHE_POISONING"
+        if final.value == "POSSIBLE_CACHE_POISONING" else final.value))
+    print("  stored              : no - simulated events are never written to the"
+          " database")
+    print("=" * 74)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     import webbrowser
     from . import dashboard
@@ -121,6 +214,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("run-once", help="run a single monitoring sweep").set_defaults(func=cmd_run_once)
     sub.add_parser("serve", help="run continuous monitoring").set_defaults(func=cmd_serve)
+    p_sim = sub.add_parser(
+        "simulate",
+        help="feed a known-incorrect answer to the comparison engine (no network "
+             "resolver involved, nothing stored)")
+    p_sim.add_argument("--domain", default="example.com",
+                       help="domain whose real authoritative answer is fetched")
+    p_sim.add_argument("--fake-ip", default="192.0.2.123",
+                       help="the incorrect address(es) to inject, comma separated "
+                            "(default: 192.0.2.123, RFC 5737 documentation space)")
+    p_sim.add_argument("--rtype", default="A", choices=["A", "AAAA"])
+    p_sim.add_argument("--ttl", type=int, default=300,
+                       help="TTL the simulated resolver claims")
+    p_sim.add_argument("--resolver-ip", default="192.0.2.1",
+                       help="address the simulated resolver is labelled with")
+    p_sim.add_argument("--verify", action="store_true",
+                       help="also run the multi-stage engine. Stages 3 and 5 need a"
+                            " real resolver to query, so a simulated one is normally"
+                            " downgraded to TEMPORARY_ANOMALY; use"
+                            " scripts/demo_hijack.py for an end-to-end test")
+    p_sim.set_defaults(func=cmd_simulate)
+
     p_report = sub.add_parser("report", help="write a one-off static HTML dashboard")
     p_report.add_argument("--no-open", action="store_true", help="write file but do not open browser")
     p_report.set_defaults(func=cmd_report)

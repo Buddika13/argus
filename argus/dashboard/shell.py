@@ -80,9 +80,26 @@ def badge(text: str, tone: str = "muted", small: bool = False) -> str:
     return '<span class="' + cls + '">' + e(text) + "</span>"
 
 
+# The status vocabulary reported for a monitored resolver, most severe first.
+HEALTHY = "HEALTHY"
+WARNING = "WARNING"
+SUSPICIOUS = "SUSPICIOUS"
+POSSIBLE_POISONING = "POSSIBLE DNS CACHE POISONING"
+UNREACHABLE = "UNREACHABLE"
+TIMEOUT = "TIMEOUT"
+ERROR = "ERROR"
+NO_DATA = "NO DATA"
+
+STATUS_SEVERITY = {POSSIBLE_POISONING: 0, UNREACHABLE: 1, TIMEOUT: 2, ERROR: 3,
+                   SUSPICIOUS: 4, WARNING: 5, HEALTHY: 6, NO_DATA: 9}
+
+_TONES = {HEALTHY: "ok", WARNING: "warn", SUSPICIOUS: "warn", TIMEOUT: "warn",
+          ERROR: "warn", POSSIBLE_POISONING: "bad", UNREACHABLE: "bad",
+          NO_DATA: "muted"}
+
+
 def status_tone(status: str) -> str:
-    return {"HEALTHY": "ok", "DEGRADED": "warn", "ANOMALY": "warn",
-            "ALERT": "bad", "NO DATA": "muted"}.get(status, "muted")
+    return _TONES.get(status, "muted")
 
 
 def sparkline(values: list) -> str:
@@ -100,18 +117,37 @@ def sparkline(values: list) -> str:
 
 
 def resolver_status(health) -> str:
-    """Transparent status label derived from stored metrics; no opaque score."""
+    """Transparent status derived from stored metrics; never an opaque score.
+
+    Evaluated most-severe first, and every branch maps to one raw metric, so a
+    label can always be justified from the database:
+
+        POSSIBLE DNS CACHE POISONING  possible_poisoning_rate > 0
+        UNREACHABLE                   availability 0% -- nothing answered
+        TIMEOUT                       timeouts are the dominant failure mode
+        ERROR                         SERVFAIL or other errors dominate
+        SUSPICIOUS                    anomaly_rate > 0, none confirmed
+        WARNING                       availability < 100% or freshness degraded
+        HEALTHY                       available, correct, fresh, no anomalies
+    """
     if health is None:
-        return "NO DATA"
+        return NO_DATA
     if (health["possible_poisoning_rate"] or 0) > 0:
-        return "ALERT"
-    if (health["anomaly_rate"] or 0) > 0:
-        return "ANOMALY"
+        return POSSIBLE_POISONING
+
     availability = health["availability_pct"]
+    if availability is not None and availability <= 0:
+        return UNREACHABLE
+    if (health["timeout_rate"] or 0) >= 0.5:
+        return TIMEOUT
+    if ((health["error_rate"] or 0) + (health["servfail_rate"] or 0)) >= 0.5:
+        return ERROR
+    if (health["anomaly_rate"] or 0) > 0:
+        return SUSPICIOUS
     if (availability is not None and availability < 100) \
             or health["freshness_status"] == "DEGRADED":
-        return "DEGRADED"
-    return "HEALTHY"
+        return WARNING
+    return HEALTHY
 
 
 def table(headers, body_rows: str, empty_cols: int = 0) -> str:
