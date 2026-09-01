@@ -48,7 +48,14 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
     settings = load_settings()
     target = next((r for r in settings.resolvers if r.name == resolver_name), None)
     if target is None:
-        return {"error": "No resolver named '%s' is configured." % resolver_name}
+        known = ", ".join(r.name for r in settings.resolvers)
+        if not resolver_name:
+            return {"error": "Choose a monitored resolver, then select Run "
+                             "verification. Configured resolvers: " + known}
+        return {"error": "No resolver named '%s' is configured. This can happen "
+                         "if it was removed from config/resolvers.yaml after "
+                         "measurements were recorded. Configured resolvers: %s"
+                         % (resolver_name, known)}
 
     probe = ResolverProbe(timeout=settings.query["timeout_seconds"],
                           retries=settings.query["retries"])

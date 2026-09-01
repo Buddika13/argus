@@ -378,6 +378,16 @@ def _select(name, label, options, current) -> str:
     return out + "</select></div>"
 
 
+def _choose(name, label, options, current) -> str:
+    """A required chooser: no 'All' entry, because exactly one value is needed."""
+    out = ("<div class='field'><label for='" + name + "'>" + e(label) + "</label>"
+           "<select id='" + name + "' name='" + name + "' required>")
+    for opt in options:
+        sel = " selected" if opt == current else ""
+        out += "<option value='" + e(opt) + "'" + sel + ">" + e(opt) + "</option>"
+    return out + "</select></div>"
+
+
 def queries(storage, live: bool, params: dict) -> str:
     get = lambda k: (params.get(k) or "").strip()  # noqa: E731
     search, resolver = get("q"), get("resolver")
@@ -538,7 +548,15 @@ def anomalies(storage, live: bool, selected_id: str = "") -> str:
 # -- 6. INDEPENDENT VERIFICATION --------------------------------------------
 
 def verification(storage, live: bool, params: dict, result=None) -> str:
-    resolver_names = [r["name"] for r in storage.list_resolvers()]
+    # The choices come from the configuration, not from the database. The
+    # resolvers table keeps every name ever recorded, so offering those would
+    # list resolvers that are no longer configured and cannot be queried.
+    from ..config import load_settings
+    try:
+        configured = load_settings().resolvers
+    except Exception:                                  # noqa: BLE001
+        configured = []
+    resolver_names = [r.name for r in configured] or         [r["name"] for r in storage.list_resolvers()]
     chosen = (params.get("resolver") or "").strip()
     domain = (params.get("domain") or "").strip()
     rtype = (params.get("rtype") or "A").strip().upper()
@@ -553,8 +571,9 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
              "<div class='field'><label for='domain'>Domain</label>"
              "<input id='domain' name='domain' value='" + e(domain)
              + "' placeholder='peoplesbank.lk' required></div>"
-             + _select("rtype", "Record type", ["A", "AAAA"], rtype)
-             + _select("resolver", "Monitored resolver", resolver_names, chosen)
+             + _choose("rtype", "Record type", ["A", "AAAA"], rtype or "A")
+             + _choose("resolver", "Monitored resolver", resolver_names,
+                       chosen or (resolver_names[0] if resolver_names else ""))
              + "<button type='submit'>Run verification</button></form>")
 
     if not live:

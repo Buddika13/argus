@@ -155,5 +155,48 @@ class VerdictMappingTests(unittest.TestCase):
         self.assertEqual(counts[verdict.INCONCLUSIVE], 1)
 
 
+
+class VerificationFormTests(unittest.TestCase):
+    """The chooser must offer only resolvers that can actually be queried."""
+
+    def _form(self) -> str:
+        db = Storage(":memory:")
+        sampledata.load(db, base_time=1_000_000.0)
+        page = render_page(db, "verification", "test-vantage", {}, live=True)
+        db.close()
+        start = page.index("<form")
+        return page[start:page.index("</form>", start)]
+
+    def test_resolver_chooser_has_no_empty_option(self):
+        # An empty value submits nothing and produced a confusing error.
+        form = self._form()
+        chooser = form[form.index("name='resolver'"):]
+        self.assertNotIn("<option value=''>", chooser)
+
+    def test_resolver_chooser_offers_configured_resolvers(self):
+        from argus.config import load_settings
+        form = self._form()
+        chooser = form[form.index("name='resolver'"):]
+        for resolver in load_settings().resolvers:
+            self.assertIn("value='" + resolver.name + "'", chooser)
+
+    def test_record_type_is_a_required_choice(self):
+        form = self._form()
+        chooser = form[form.index("name='rtype'"):]
+        self.assertIn("required", chooser)
+        self.assertNotIn("<option value=''>", chooser)
+
+    def test_an_unconfigured_name_is_explained(self):
+        from argus.dashboard.live import run_verification
+        result = run_verification("example.com", "A", "no-such-resolver-xyz")
+        self.assertIn("error", result)
+        self.assertIn("no-such-resolver-xyz", result["error"])
+        self.assertIn("Configured resolvers", result["error"])
+
+    def test_an_empty_name_asks_for_a_choice(self):
+        from argus.dashboard.live import run_verification
+        result = run_verification("example.com", "A", "")
+        self.assertIn("Choose a monitored resolver", result["error"])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
