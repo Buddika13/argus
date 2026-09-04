@@ -184,15 +184,21 @@ EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
 
 
 def page(active: str, vantage: str, body: str, live: bool = False,
-         refresh_seconds: int = 0) -> str:
-    """Wrap page content in the shared chrome and return a complete document."""
+         refresh_seconds: int = 0, scope: str = "") -> str:
+    """Wrap page content in the shared chrome and return a complete document.
+
+    `scope` is an optional summary of what is being monitored -- resolver and
+    domain counts, and the interval -- so a screenshot of any page carries
+    enough context to be read on its own.
+    """
     key, _file, _path, title, blurb = PAGE_BY_KEY[active]
     meta_refresh = ('<meta http-equiv="refresh" content="%d">' % int(refresh_seconds)
                     if refresh_seconds and refresh_seconds > 0 else "")
     return _DOC.format(
         css=_CSS, meta_refresh=meta_refresh, eye=EYE,
         nav=_nav(active, live), title=e(title), blurb=e(blurb),
-        vantage=e(vantage), generated=time.strftime("%Y-%m-%d %H:%M:%S"),
+        vantage=e(vantage), scope=(" &middot; " + e(scope)) if scope else "",
+        generated=time.strftime("%Y-%m-%d %H:%M:%S"),
         body=body,
     )
 
@@ -248,8 +254,10 @@ opacity:.75;line-height:1.6}
 .main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
 .topbar{background:var(--panel);border-bottom:1px solid var(--line);
 padding:14px 26px;position:sticky;top:0;z-index:2}
-.topbar h1{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.01em}
-.topbar .meta{color:var(--muted);font-size:11.5px;margin-top:2px}
+.topbar h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.012em}
+.topbar .tagline{color:var(--ink);opacity:.72;font-size:12.5px;margin-top:3px;
+max-width:78ch;line-height:1.45}
+.topbar .meta{color:var(--muted);font-size:11.5px;margin-top:5px}
 .content{padding:24px 26px 56px;max-width:1180px}
 .ptitle{margin:0 0 5px;font-size:22px;font-weight:650;letter-spacing:-.018em;
 text-wrap:balance}
@@ -381,7 +389,9 @@ _DOC = """<!doctype html>
 <div class="main">
   <div class="topbar">
     <h1>Argus &mdash; DNS Caching-Server Health &amp; Cache-Poisoning Monitor</h1>
-    <div class="meta">vantage <b>{vantage}</b> &middot; generated {generated}</div>
+    <div class="tagline">Independently verifying public caching DNS resolvers
+      against the authoritative DNS hierarchy</div>
+    <div class="meta">vantage <b>{vantage}</b>{scope} &middot; generated {generated}</div>
   </div>
   <div class="content">
     <h1 class="ptitle">{title}</h1>

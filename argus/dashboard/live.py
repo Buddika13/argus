@@ -102,6 +102,23 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
     }
 
 
+def _scope() -> str:
+    """A one-line summary of what is monitored, for the page header."""
+    try:
+        from ..config import load_settings
+        settings = load_settings()
+    except Exception:                                  # noqa: BLE001
+        return ""
+    resolvers = len(settings.enabled_resolvers)
+    domains = len(settings.watchlist)
+    tlds = len({d.rsplit(".", 1)[-1] for d in settings.watchlist})
+    minutes = max(1, int(settings.schedule["interval_seconds"]) // 60)
+    # Plain text: the caller escapes this, so HTML entities would be shown
+    # literally rather than rendered.
+    return ("%d resolvers · %d domains across %d TLDs · every %d min"
+            % (resolvers, domains, tlds, minutes))
+
+
 def render_page(storage: Storage, key: str, vantage: str, params: dict,
                 live: bool = True, refresh_seconds: int = 0) -> str:
     """Render one dashboard page by key."""
@@ -133,7 +150,8 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
         raise KeyError(key)
     # Auto-refresh would discard a submitted verification, so it is not applied there.
     refresh = 0 if key == "verification" else refresh_seconds
-    return page(key, vantage, body, live=live, refresh_seconds=refresh)
+    return page(key, vantage, body, live=live, refresh_seconds=refresh,
+                scope=_scope())
 
 
 def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
