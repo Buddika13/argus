@@ -123,9 +123,9 @@ def _verdict_banner(alerts: int, anomalies: int, has_data: bool) -> str:
 def overview(storage, live: bool) -> str:
     rows = resolver_summaries(storage)
     counts = storage.table_counts()
-    healthy = sum(1 for x in rows if x["status"] == HEALTHY)
-    unhealthy = sum(1 for x in rows
-                    if x["status"] not in (HEALTHY, NO_DATA))
+    healthy = sum(1 for x in rows if x["enabled"] and x["status"] == HEALTHY)
+    unhealthy = sum(1 for x in rows if x["enabled"]
+                    and x["status"] not in (HEALTHY, NO_DATA))
     alerts = counts.get("alerts", 0)
     anomalies = counts.get("anomalies", 0)
     has_data = counts.get("query_results", 0) > 0
@@ -136,8 +136,13 @@ def overview(storage, live: bool) -> str:
                      "<code>argus run-once</code> (or <code>argus serve</code>), "
                      "then reload.", "warn")
 
+    # Count only resolvers actually being monitored. The resolvers table keeps
+    # every name ever recorded, including disabled placeholders, and counting
+    # those implied they were monitored but unhealthy.
+    monitored = [x for x in rows if x["enabled"]]
+
     body += "<h2>System totals</h2><div class='cards'>"
-    body += _card("muted", len(rows), "monitored resolvers")
+    body += _card("muted", len(monitored), "monitored resolvers")
     body += _card("ok", healthy, "healthy")
     body += _card("warn", unhealthy, "unhealthy / alert")
     body += _card("warn", anomalies, "anomalies")
