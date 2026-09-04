@@ -217,8 +217,12 @@ _CSS = """
 --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-font:14px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
--webkit-font-smoothing:antialiased}
+font:14.5px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Ubuntu","Segoe UI",
+Roboto,Helvetica,Arial,sans-serif;
+-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+text-rendering:optimizeLegibility}
+/* Digits line up in every column: counts, latencies, percentages. */
+td,th,.card .n,.metric .v,.pager{font-variant-numeric:tabular-nums}
 a{color:var(--accent)}
 .layout{display:flex;min-height:100vh;align-items:stretch}
 
@@ -229,9 +233,11 @@ padding:20px 0 30px;display:flex;flex-direction:column}
 border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:12px}
 .eye{width:26px;height:26px;flex:none;color:#7fb0e0}
 .brand b{color:#fff;font-size:13px;line-height:1.3;font-weight:650}
-.navlink{display:block;padding:9px 18px;color:var(--railink);text-decoration:none;
-font-size:13px;border-left:3px solid transparent}
-.navlink:hover{background:rgba(255,255,255,.06);color:#fff}
+.navlink{display:block;padding:10px 18px;color:var(--railink);text-decoration:none;
+font-size:13.5px;border-left:3px solid transparent;
+transition:background .16s ease,color .16s ease,border-color .16s ease}
+.navlink:hover{background:rgba(255,255,255,.07);color:#fff}
+.navlink:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .navlink.active{background:rgba(255,255,255,.1);color:var(--railactive);
 border-left-color:var(--accent);font-weight:600}
 .railfoot{margin-top:auto;padding:14px 18px 0;font-size:10.5px;color:var(--railink);
@@ -244,10 +250,12 @@ padding:14px 26px;position:sticky;top:0;z-index:2}
 .topbar h1{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.01em}
 .topbar .meta{color:var(--muted);font-size:11.5px;margin-top:2px}
 .content{padding:24px 26px 56px;max-width:1180px}
-.ptitle{margin:0 0 4px;font-size:20px;font-weight:650;letter-spacing:-.015em}
-.pblurb{margin:0 0 22px;color:var(--muted);font-size:13px;max-width:70ch}
-h2{font-size:11.5px;margin:28px 0 10px;color:var(--muted);font-weight:700;
-text-transform:uppercase;letter-spacing:.09em}
+.ptitle{margin:0 0 5px;font-size:22px;font-weight:650;letter-spacing:-.018em;
+text-wrap:balance}
+.pblurb{margin:0 0 24px;color:var(--muted);font-size:13.5px;max-width:68ch;
+line-height:1.55}
+h2{font-size:11px;margin:32px 0 11px;color:var(--muted);font-weight:700;
+text-transform:uppercase;letter-spacing:.1em}
 h2:first-of-type{margin-top:0}
 
 /* verdict + notes */
@@ -277,8 +285,8 @@ margin-bottom:8px}
 padding:13px 15px 15px;box-shadow:var(--shadow)}
 .card .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
 color:var(--muted);font-weight:650}
-.card .n{font-size:27px;font-weight:700;margin-top:6px;letter-spacing:-.02em;
-font-variant-numeric:tabular-nums}
+.card .n{font-size:28px;font-weight:700;margin-top:7px;letter-spacing:-.025em;
+line-height:1.15;font-variant-numeric:tabular-nums}
 .card.ok .n{color:var(--ok)}.card.warn .n{color:var(--warn)}
 .card.bad .n{color:var(--bad)}.card.muted .n{color:var(--muted)}
 
@@ -286,12 +294,13 @@ font-variant-numeric:tabular-nums}
 .tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
 border-radius:10px;box-shadow:var(--shadow);margin-bottom:6px}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);
-white-space:nowrap;vertical-align:top}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);
+white-space:nowrap;vertical-align:middle}
 th{color:var(--muted);font-weight:650;text-transform:uppercase;font-size:10px;
-letter-spacing:.07em;background:rgba(127,127,127,.05)}
+letter-spacing:.08em;background:rgba(127,127,127,.05);white-space:nowrap}
 tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:rgba(127,127,127,.045)}
+tbody tr{transition:background .14s ease}
+tbody tr:hover td{background:rgba(127,127,127,.05)}
 tr.dim td{opacity:.55}
 td.wrap{white-space:normal;max-width:460px;line-height:1.5}
 
@@ -320,9 +329,14 @@ button{font:inherit;font-size:13px;font-weight:600;padding:7px 15px;border-radiu
 border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer}
 button:hover{filter:brightness(1.08)}
 button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+a{transition:color .14s ease}
 a.btn{display:inline-block;text-decoration:none;font-size:12.5px;font-weight:600;
-padding:6px 12px;border-radius:7px;border:1px solid var(--line);
-background:var(--panel);color:var(--accent)}
+padding:7px 13px;border-radius:7px;border:1px solid var(--line);
+background:var(--panel);color:var(--accent);
+transition:background .16s ease,border-color .16s ease}
+a.btn:hover{border-color:var(--accent);background:var(--bg)}
+a.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{transition:filter .16s ease}
 a.btn.off{color:var(--muted);opacity:.5;pointer-events:none}
 
 /* pagination + misc */
