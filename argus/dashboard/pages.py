@@ -101,10 +101,18 @@ def _verdict_banner(alerts: int, anomalies: int, has_data: bool) -> str:
                 "</b><span>Uncorroborated and persistent. Possible &mdash; not "
                 "proven.</span></div></div>")
     if anomalies:
-        return ('<div class="verdict warn"><span class="dot"></span><div><b>'
-                + str(anomalies) + " anomalies recorded, none confirmed as poisoning"
-                "</b><span>Differences were observed and explained by independent "
-                "checks.</span></div></div>")
+        # Lead with the conclusion, not the count: nothing was confirmed, and a
+        # number alone reads as an alarm. Amber is kept so an investigated
+        # difference stays visible rather than disappearing into a clean page.
+        if anomalies == 1:
+            subject, them = "1 difference was", "it"
+        else:
+            subject, them = "%d differences were" % anomalies, "them"
+        return ('<div class="verdict warn"><span class="dot"></span><div>'
+                "<b>No cache poisoning detected</b><span>"
+                + subject + " investigated; independent checks explained "
+                + them + " as legitimate, so no alert was raised."
+                "</span></div></div>")
     return ('<div class="verdict ok"><span class="dot"></span><div>'
             "<b>No poisoning detected</b><span>Every monitored resolver agreed with "
             "the authoritative hierarchy.</span></div></div>")
