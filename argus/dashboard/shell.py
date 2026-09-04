@@ -229,10 +229,11 @@ a{color:var(--accent)}
 /* sidebar */
 .rail{width:212px;flex:none;background:var(--rail);color:var(--railink);
 padding:20px 0 30px;display:flex;flex-direction:column}
-.brand{display:flex;align-items:center;gap:9px;padding:0 18px 16px;
+.brand{display:flex;align-items:center;gap:11px;padding:0 18px 18px;
 border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:12px}
-.eye{width:26px;height:26px;flex:none;color:#7fb0e0}
-.brand b{color:#fff;font-size:13px;line-height:1.3;font-weight:650}
+.eye{width:31px;height:31px;flex:none;color:#7fb0e0}
+.brand b{color:#fff;font-size:15.5px;line-height:1.25;font-weight:650;
+letter-spacing:-.01em}
 .navlink{display:block;padding:10px 18px;color:var(--railink);text-decoration:none;
 font-size:13.5px;border-left:3px solid transparent;
 transition:background .16s ease,color .16s ease,border-color .16s ease}
