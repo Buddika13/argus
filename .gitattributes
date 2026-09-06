@@ -1,0 +1,42 @@
+# Line endings.
+#
+# Argus is developed on Windows and run on Ubuntu. Without this file, and with
+# core.autocrlf=true, CRLF endings were committed into the repository: on Linux
+# that makes `bash scripts/setup_ubuntu.sh` fail with "$'\r': command not found"
+# and breaks the backslash line-continuations in the Makefile.
+#
+# Everything textual is therefore stored and checked out with LF, regardless of
+# the developer's platform. Only files that Windows tools genuinely require are
+# left as CRLF.
+
+* text=auto eol=lf
+
+# Must be LF: these are executed by a POSIX shell or by GNU make.
+*.sh          text eol=lf
+Makefile      text eol=lf
+*.mk          text eol=lf
+
+# Source, configuration and documentation.
+*.py          text eol=lf
+*.yaml        text eol=lf
+*.yml         text eol=lf
+*.toml        text eol=lf
+*.md          text eol=lf
+*.txt         text eol=lf
+*.html        text eol=lf
+*.json        text eol=lf
+*.cfg         text eol=lf
+.gitignore    text eol=lf
+.env.example  text eol=lf
+
+# Windows batch files are the one place CRLF is required.
+*.bat         text eol=crlf
+*.cmd         text eol=crlf
+
+# Never touched: byte-for-byte as stored.
+*.png         binary
+*.jpg         binary
+*.pdf         binary
+*.db          binary
+*.sqlite3     binary
+*.ico         binary

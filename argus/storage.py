@@ -394,7 +394,7 @@ class Storage:
     @staticmethod
     def _event_filters(resolver: str = "", domain: str = "", rtype: str = "",
                        classification: str = "", since: float = 0.0,
-                       search: str = "") -> tuple[str, list]:
+                       until: float = 0.0, search: str = "") -> tuple[str, list]:
         """Build a WHERE clause over monitoring_events. Empty filters are ignored."""
         clauses, params = [], []
         if resolver:
@@ -412,6 +412,9 @@ class Storage:
         if since:
             clauses.append("timestamp >= ?")
             params.append(since)
+        if until:
+            clauses.append("timestamp <= ?")
+            params.append(until)
         if search:
             clauses.append("(domain LIKE ? OR resolver LIKE ? OR returned_records LIKE ?)")
             like = "%" + search + "%"
@@ -444,6 +447,92 @@ class Storage:
             " WHERE " + column + " IS NOT NULL AND " + column + " <> ''"
             " ORDER BY " + column).fetchall()
         return [r[0] for r in rows]
+
+    # -- rollups (used by the report generator) ---------------------------
+
+    _BENIGN = ("NORMAL", "BENIGN_DIFFERENCE")
+
+    def rollup(self, column: str, since: float = 0.0,
+               until: float = 0.0) -> list[sqlite3.Row]:
+        """Totals per resolver or per domain over a window of measurements.
+
+        One pass in SQL rather than paging every row into Python: a report over
+        a month of sweeps would otherwise pull tens of thousands of rows just to
+        count them.
+        """
+        if column not in ("resolver", "domain"):
+            raise ValueError("column not allowed: " + column)
+        where, params = self._event_filters(since=since, until=until)
+        benign = ",".join("?" for _ in self._BENIGN)
+        return self._conn.execute(
+            "SELECT " + column + " AS key, count(*) AS checks,"
+            " sum(CASE WHEN comparison_classification IN (" + benign + ")"
+            "     THEN 1 ELSE 0 END) AS matched,"
+            " sum(CASE WHEN comparison_classification = 'POSSIBLE_CACHE_POISONING'"
+            "     THEN 1 ELSE 0 END) AS poisoning,"
+            " sum(CASE WHEN comparison_classification NOT IN (" + benign + ")"
+            "     THEN 1 ELSE 0 END) AS flagged,"
+            " avg(response_time_ms) AS avg_latency,"
+            " max(timestamp) AS last_seen"
+            " FROM monitoring_events" + where +
+            " GROUP BY " + column + " ORDER BY flagged DESC, " + column,
+            list(self._BENIGN) + list(self._BENIGN) + params).fetchall()
+
+    def classification_counts(self, since: float = 0.0,
+                              until: float = 0.0) -> list[sqlite3.Row]:
+        """How many measurements landed in each stored classification."""
+        where, params = self._event_filters(since=since, until=until)
+        return self._conn.execute(
+            "SELECT comparison_classification AS classification, count(*) AS n"
+            " FROM monitoring_events" + where +
+            " GROUP BY comparison_classification ORDER BY n DESC",
+            params).fetchall()
+
+    def dnssec_rollup(self, since: float = 0.0,
+                      until: float = 0.0) -> list[sqlite3.Row]:
+        """The most recent DNSSEC observation per (domain, resolver)."""
+        clauses, params = [], []
+        if since:
+            clauses.append("observed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("observed_at <= ?")
+            params.append(until)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return self._conn.execute(
+            "SELECT domain, resolver, signed, posture, security, ad_flag,"
+            " max(observed_at) AS observed_at"
+            " FROM dnssec_status" + where +
+            " GROUP BY domain, resolver ORDER BY domain, resolver",
+            params).fetchall()
+
+    def alerts_between(self, since: float = 0.0,
+                       until: float = 0.0) -> list[sqlite3.Row]:
+        clauses, params = [], []
+        if since:
+            clauses.append("confirmed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("confirmed_at <= ?")
+            params.append(until)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return self._conn.execute(
+            "SELECT * FROM alerts" + where + " ORDER BY confirmed_at DESC",
+            params).fetchall()
+
+    def anomalies_between(self, since: float = 0.0,
+                          until: float = 0.0) -> list[sqlite3.Row]:
+        clauses, params = [], []
+        if since:
+            clauses.append("observed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("observed_at <= ?")
+            params.append(until)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return self._conn.execute(
+            "SELECT * FROM anomalies" + where + " ORDER BY observed_at DESC",
+            params).fetchall()
 
     def anomaly_by_id(self, anomaly_id: int) -> Optional[sqlite3.Row]:
         return self._conn.execute(

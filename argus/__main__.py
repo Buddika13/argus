@@ -5,6 +5,7 @@
     python -m argus serve       continuous monitoring at the configured interval
     python -m argus simulate    feed a known-incorrect answer to the comparison
                                 engine (no resolver queried, nothing stored)
+    python -m argus export      render a report as a PDF or CSV file
     python -m argus report      write the dashboard as static pages
     python -m argus dashboard   serve the dashboard live
 
@@ -20,10 +21,11 @@ Terminology used throughout the codebase and the documentation:
                                   delegation, never the final address
     TLD name server               the server responsible for delegating within
                                   a top-level domain
-    Trusted reference resolver    a public recursive resolver (Google,
+    Cross-check resolver          a public recursive resolver (Google,
                                   Cloudflare, Quad9, OpenDNS, Verisign) used as
-                                  a corroborating cross-check. These are
-                                  recursive resolvers, NOT authoritative servers
+                                  a corroborating cross-check only. These are
+                                  recursive resolvers, NOT authoritative servers,
+                                  and they never define ground truth
     Possible DNS cache poisoning  a mismatch that survived every independent
                                   check; never a claim of proven poisoning
 """
@@ -359,6 +361,43 @@ def cmd_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """Render a report to a downloadable file (PDF or CSV).
+
+    The same builder the dashboard uses, so a file generated here and one
+    downloaded from the Reports page are byte-for-byte the same report.
+    """
+    from . import reporting
+
+    settings = load_settings()
+    since = reporting.parse_day(args.since)
+    until = reporting.parse_day(args.until, end_of_day=True)
+    if args.days:
+        until = until or time.time()
+        since = until - args.days * 86400
+
+    storage = Storage(settings.db_path)
+    try:
+        report = reporting.build(storage, args.type, since=since, until=until,
+                                 vantage=settings.vantage)
+    finally:
+        storage.close()
+
+    if args.out:
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(reporting.render(report, args.format))
+    else:
+        target = reporting.save(report, args.format)
+
+    print("%s written to %s (%s, %d bytes)"
+          % (report.title, target, report.period, target.stat().st_size))
+    if not args.no_open and args.format == "pdf":
+        import webbrowser
+        webbrowser.open(target.resolve().as_uri())
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     import webbrowser
     from . import dashboard
@@ -386,7 +425,15 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+# Imported lazily elsewhere; the parser needs the names at build time and the
+# reporting module pulls in no network code.
+def _report_type_choices():
+    from .reporting import REPORT_TYPES
+    return REPORT_TYPES
+
+
 def build_parser() -> argparse.ArgumentParser:
+    _REPORT_TYPES = _report_type_choices()
     parser = argparse.ArgumentParser(prog="argus",
                                      description="DNS resolver health & cache-poisoning monitor.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -427,6 +474,24 @@ def build_parser() -> argparse.ArgumentParser:
                             " downgraded to TEMPORARY_ANOMALY; use"
                             " scripts/demo_hijack.py for an end-to-end test")
     p_sim.set_defaults(func=cmd_simulate)
+
+    p_export = sub.add_parser(
+        "export", help="render a report to a PDF or CSV file")
+    p_export.add_argument("--type", default="summary",
+                          choices=[k for k, _t, _d in _REPORT_TYPES],
+                          help="which report to build (default: summary)")
+    p_export.add_argument("--format", default="pdf", choices=["pdf", "csv"])
+    p_export.add_argument("--since", default="", metavar="YYYY-MM-DD",
+                          help="earliest measurement to include")
+    p_export.add_argument("--until", default="", metavar="YYYY-MM-DD",
+                          help="latest measurement to include (inclusive)")
+    p_export.add_argument("--days", type=int, default=0, metavar="N",
+                          help="shorthand for the last N days")
+    p_export.add_argument("--out", default="", metavar="PATH",
+                          help="write here instead of the reports/ directory")
+    p_export.add_argument("--no-open", action="store_true",
+                          help="do not open the finished PDF in a browser")
+    p_export.set_defaults(func=cmd_export)
 
     p_report = sub.add_parser("report", help="write a one-off static HTML dashboard")
     p_report.add_argument("--no-open", action="store_true", help="write file but do not open browser")

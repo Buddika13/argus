@@ -177,7 +177,7 @@ long page, each with a single job:
 | DNS Query Monitor | every measurement, with search, five filters and paging |
 | Anomaly Investigation | anomalies, their stored checks, and the legitimate explanations each was tested against |
 | Independent Verification | a live check of one resolver against the controls and the hierarchy |
-| Reports | daily, resolver-health, anomaly, and cache-poisoning reports |
+| Reports | summary, resolver-health, domain-analysis, alerts, DNSSEC and anomaly reports, previewed on the page and downloadable as PDF or CSV |
 
 Findings are reported as one of three verdicts — `NO_POISONING_DETECTED`,
 `POSSIBLE_CACHE_POISONING`, `INCONCLUSIVE` — mapped from the stored
@@ -204,7 +204,7 @@ matters most: they sit on opposite sides of the comparison.
 | **Authoritative DNS server** | the server authoritative for the queried zone; the source of ground truth |
 | **Root DNS server** | root infrastructure. Returns TLD **delegation**, never the final address |
 | **TLD name server** | delegates within a top-level domain (`.lk`, `.com`) |
-| **Trusted reference resolver** | Google, Cloudflare, Quad9, OpenDNS, Verisign — **recursive resolvers**, used only as a corroborating cross-check. They are *not* authoritative servers |
+| **Cross-check resolver** | Google, Cloudflare, Quad9, OpenDNS, Verisign — **recursive resolvers**, used only as a corroborating cross-check. They are *not* authoritative servers and never define ground truth |
 | **Possible DNS cache poisoning** | a mismatch that survived every independent check. Never a claim of proven poisoning |
 
 Argus itself is a **monitoring system for caching resolvers**. It is not a
@@ -249,7 +249,17 @@ python -m argus run-once      # one monitoring sweep
 python -m argus report        # write report.html and open it
 python -m argus dashboard     # live auto-refreshing dashboard (http://127.0.0.1:8080)
 python -m argus serve         # continuous monitoring (Ctrl+C to stop)
+python -m argus export --type summary --format pdf   # a downloadable report
 ```
+
+Reports are built by `argus/reporting.py` and rendered to PDF by
+`argus/pdfdoc.py`, a small writer in the standard library — no reportlab, no
+LaTeX, no headless browser, nothing extra to install. The Reports page of the
+live dashboard offers the same six report types, a period, a format and the
+optional sections, and hands the browser the finished file; each one is kept
+under `reports/` and listed on the page. Types: `summary`, `health`, `domains`,
+`alerts`, `dnssec`, `anomalies`. On Linux, `cron` plus `argus export` produces
+them on any schedule — see `docs/UBUNTU.md`.
 
 Helper scripts:
 

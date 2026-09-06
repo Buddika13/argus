@@ -79,6 +79,25 @@ BENIGN_EXPLANATIONS = (
 )
 
 
+# A one-or-two word label for the same stored classification, for tables where
+# the full name will not fit. Display shorthand only: it never re-decides, and
+# every entry names the classification it abbreviates.
+_SHORT = {
+    "NORMAL": "Match",
+    "BENIGN_DIFFERENCE": "Explained",
+    "TEMPORARY_ANOMALY": "Transient",
+    "DNS_INTEGRITY_ANOMALY": "Irregular",
+    "ANOMALY": "Under review",
+    "POSSIBLE_CACHE_POISONING": "Mismatch",
+    "VERIFICATION_FAILED": "Not measured",
+}
+
+
+def short_of(classification: str) -> str:
+    """A compact label for a stored classification, for narrow table cells."""
+    return _SHORT.get((classification or "").upper(), "Unclassified")
+
+
 def verdict_of(classification: str) -> str:
     """The reported verdict for a stored classification."""
     return _MAP.get((classification or "").upper(), (INCONCLUSIVE, "muted", ""))[0]

@@ -5,7 +5,7 @@
     Cache Poisoning         confirmed events and the evidence behind each
     DNS Query Monitor       every measurement, filterable and paged
     Anomaly Investigation   differences under review and how they were tested
-    Independent Verification  a live check against trusted and authoritative sources
+    Independent Verification  a live check against cross-check resolvers and the hierarchy
     Reports                 summaries for a written report
 
 Public API, unchanged from the single-page version:

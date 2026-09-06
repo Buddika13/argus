@@ -26,3 +26,6 @@ reports.html
 
 # Sweep lock (created and removed automatically by argus run-once / serve).
 *.sweep.lock
+
+# Generated report files (build output of `argus export` / the Reports page).
+reports/

@@ -12,12 +12,24 @@ from __future__ import annotations
 
 import json
 
+from .. import reporting
 from . import verdict
-from .shell import (HEALTHY, NO_DATA, STATUS_SEVERITY, badge, e, link, ms, note,
-                    pct, rate, records, resolver_status, sparkline, status_tone,
-                    table, ts)
+from .shell import (HEALTHY, ICON_PLAY, ICON_REPORT, KPI_ICONS, NO_DATA,
+                    SERIES_COLOURS, STATUS_SEVERITY, badge, bar, e, gauge, kpi,
+                    linechart, link, ms, note, pagehead, pct, rate, records,
+                    resolver_status, sparkline, status_tone, table, ts)
 
 PAGE_SIZE = 25
+
+# How many recent measurements and alerts the Overview summarises. Small on
+# purpose: the Overview points at the pages that hold the full record.
+OVERVIEW_ROWS = 6
+OVERVIEW_ALERTS = 4
+
+# Server routes that return a file rather than a page. Static snapshots have no
+# server behind them, so the page degrades to naming the files instead.
+REPORT_DOWNLOAD = "/reports/download"
+REPORT_FILE = "/reports/file"
 
 
 # -- shared reads -----------------------------------------------------------
@@ -37,6 +49,8 @@ def resolver_summaries(storage) -> list[dict]:
             "latency": health["avg_latency_ms"] if health else None,
             "correctness": health["correctness_rate"] if health else None,
             "freshness": health["freshness_status"] if health else None,
+            "freshness_rate": health["freshness_ok_rate"] if health else None,
+            "ad_rate": health["ad_rate"] if health else None,
             "timeouts": health["timeout_rate"] if health else None,
             "servfail": health["servfail_rate"] if health else None,
             "errors": health["error_rate"] if health else None,
@@ -120,62 +134,249 @@ def _verdict_banner(alerts: int, anomalies: int, has_data: bool) -> str:
 
 # -- 1. OVERVIEW ------------------------------------------------------------
 
+def _watchlist_size(storage) -> int:
+    """How many domains are actually being monitored.
+
+    The configuration is the authority: the domains table keeps every name ever
+    recorded, so counting it would include names dropped from the watch-list.
+    """
+    try:
+        from ..config import load_settings
+        configured = len(load_settings().watchlist)
+        if configured:
+            return configured
+    except Exception:                                  # noqa: BLE001
+        pass
+    return storage.table_counts().get("domains", 0)
+
+
+def _mean(values):
+    values = [v for v in values if isinstance(v, (int, float))]
+    return sum(values) / len(values) if values else None
+
+
+def _health_dimensions(rows) -> str:
+    """The four integrity dimensions, averaged over resolvers that have data.
+
+    Each ring is one stored metric, not a blend: a number here can always be
+    traced back to a single column in health_metrics.
+    """
+    measured = [x for x in rows if x["enabled"] and x["status"] != NO_DATA]
+    correctness = _mean(x["correctness"] for x in measured)
+    freshness = _mean(x["freshness_rate"] for x in measured)
+    availability = _mean(x["availability"] for x in measured)
+    authenticated = _mean(x["ad_rate"] for x in measured)
+
+    def as_pct(value):
+        return value * 100 if isinstance(value, (int, float)) else None
+
+    def tone(value, preferred, good=99.0, fair=90.0):
+        if not isinstance(value, (int, float)):
+            return "muted"
+        return preferred if value >= good else ("warn" if value >= fair else "bad")
+
+    correctness_pct, freshness_pct = as_pct(correctness), as_pct(freshness)
+    ad_pct = as_pct(authenticated)
+
+    return ("<div class='gauges'>"
+            + gauge(correctness_pct, "Correctness", tone(correctness_pct, "ok"))
+            + gauge(freshness_pct, "Freshness", tone(freshness_pct, "info"))
+            + gauge(availability, "Availability", tone(availability, "violet"))
+            + gauge(ad_pct, "DNSSEC posture",
+                    "warn" if ad_pct is not None else "muted")
+            + "</div>")
+
+
+def _performance_chart(storage, rows) -> str:
+    """Response time per resolver across the recorded window.
+
+    Points come from health_metrics, one per resolver per sweep, so the chart
+    plots exactly what was measured rather than an interpolation.
+    """
+    series = []
+    for index, row in enumerate(x for x in rows if x["enabled"]):
+        history = storage.metric_history(row["name"], limit=24)
+        points = [(h["computed_at"], h["avg_latency_ms"]) for h in history
+                  if h["computed_at"] and h["avg_latency_ms"] is not None]
+        if points:
+            series.append({"name": row["name"],
+                           "colour": SERIES_COLOURS[index % len(SERIES_COLOURS)],
+                           "points": points})
+    if not series:
+        return ("<p class='empty'>No response-time history yet &mdash; run a "
+                "sweep to record the first points.</p>")
+
+    stamps = [x for s in series for x, _y in s["points"]]
+    span = (ts(min(stamps)) + " &rarr; " + ts(max(stamps)) + " &middot; "
+            + str(len(stamps)) + " recorded points")
+    return "<p class='sub'>" + span + "</p>" + linechart(series)
+
+
+def _alert_feed(storage) -> str:
+    """Confirmed events first, then anomalies still under review.
+
+    Both appear because an empty panel says nothing about whether the system is
+    working; the severity marker keeps the two apart.
+    """
+    items, shown = "", 0
+    for a in storage.recent_alerts(OVERVIEW_ALERTS):
+        items += ("<li><span class='fi bad'>!</span><div class='ft'><b>"
+                  + e(a["domain"]) + " (" + e(a["rtype"]) + ")</b><span>"
+                  + badge(verdict.POSSIBLE, "bad", True) + " "
+                  + e(a["resolver"]) + " &nbsp;|&nbsp; "
+                  + ts(a["confirmed_at"]) + "</span></div></li>")
+        shown += 1
+    for a in storage.recent_anomalies(OVERVIEW_ALERTS * 2):
+        if shown >= OVERVIEW_ALERTS:
+            break
+        if a["classification"] == "POSSIBLE_CACHE_POISONING":
+            continue                              # already listed as an alert
+        cls = a["classification"]
+        items += ("<li><span class='fi warn'>!</span><div class='ft'><b>"
+                  + e(a["domain"]) + " (" + e(a["rtype"]) + ")</b><span>"
+                  + badge(verdict.verdict_of(cls), verdict.tone_of(cls), True)
+                  + " " + e(a["resolver"]) + " &nbsp;|&nbsp; "
+                  + ts(a["observed_at"]) + "</span></div></li>")
+        shown += 1
+    if not items:
+        return ("<p class='empty'>Nothing raised. No resolver has disagreed "
+                "with the authoritative hierarchy.</p>")
+    return "<ul class='feed'>" + items + "</ul>"
+
+
+def _recent_results(storage, live: bool) -> str:
+    rowsout = ""
+    for r in storage.recent_events(OVERVIEW_ROWS):
+        cls = r["comparison_classification"]
+        detail = (r["verification_result"] or "").strip()
+        if len(detail) > 64:
+            detail = detail[:61].rstrip() + "..."
+        href = link("queries", live,
+                    "?resolver=" + e(r["resolver"] or "")
+                    + "&amp;domain=" + e(r["domain"] or ""))
+        rowsout += ("<tr><td class='small muted'>" + ts(r["timestamp"]) + "</td>"
+                    "<td>" + e(r["domain"]) + " <span class='chip'>"
+                    + e(r["query_type"]) + "</span></td>"
+                    "<td><b>" + e(r["resolver"]) + "</b></td>"
+                    "<td>" + badge(verdict.short_of(cls), verdict.tone_of(cls),
+                                   True) + "</td>"
+                    "<td class='wrap small muted'>" + (e(detail) or "&mdash;")
+                    + "</td>"
+                    "<td><a href='" + href + "'>View</a></td></tr>")
+    return table(["Time", "Domain", "Resolver", "Result", "Details", ""],
+                 rowsout, 6)
+
+
+def head(key: str, live: bool) -> str:
+    """A page's title block. Only the Overview replaces the default one."""
+    if key != "overview":
+        return ""
+    return pagehead(
+        "Welcome to ARGUS",
+        "A national DNS caching-server health and cache-poisoning monitoring "
+        "system. Every answer summarised below was checked against the "
+        "authoritative hierarchy, walked from the root.",
+        '<a class="action" href="' + link("reports", live) + '">'
+        + ICON_REPORT + "View reports</a>")
+
+
+def _run_check_box() -> str:
+    """How to take a fresh measurement.
+
+    Deliberately a command rather than a working button: the dashboard server
+    is a read-only view of the database, and a sweep started by a browser click
+    would block it for as long as the sweep runs while writing underneath it.
+    """
+    return ('<details class="runbox"><summary><span class="action primary">'
+            + ICON_PLAY + "Run check now</span></summary>"
+            "<div class='body'>"
+            "<p>The dashboard reads the database and never writes to it. Take a "
+            "fresh measurement from a terminal in the project folder:</p>"
+            "<pre>python -m argus run-once</pre>"
+            "<p>Then reload this page. For continuous monitoring at the "
+            "configured interval, run <code>python -m argus serve</code> and "
+            "leave it running.</p></div></details>")
+
+
 def overview(storage, live: bool) -> str:
     rows = resolver_summaries(storage)
     counts = storage.table_counts()
-    healthy = sum(1 for x in rows if x["enabled"] and x["status"] == HEALTHY)
-    unhealthy = sum(1 for x in rows if x["enabled"]
-                    and x["status"] not in (HEALTHY, NO_DATA))
+    # Count only resolvers actually being monitored. The resolvers table keeps
+    # every name ever recorded, including disabled placeholders, and counting
+    # those implied they were monitored but unhealthy.
+    monitored = [x for x in rows if x["enabled"]]
+    responding = [x for x in monitored
+                  if isinstance(x["availability"], (int, float))
+                  and x["availability"] > 0]
     alerts = counts.get("alerts", 0)
     anomalies = counts.get("anomalies", 0)
     has_data = counts.get("query_results", 0) > 0
 
-    body = _verdict_banner(alerts, anomalies, has_data)
+    body = _run_check_box()
+    body += _verdict_banner(alerts, anomalies, has_data)
     if not has_data:
         body += note("No monitoring data available yet. Run a sweep with "
                      "<code>argus run-once</code> (or <code>argus serve</code>), "
                      "then reload.", "warn")
 
-    # Count only resolvers actually being monitored. The resolvers table keeps
-    # every name ever recorded, including disabled placeholders, and counting
-    # those implied they were monitored but unhealthy.
-    monitored = [x for x in rows if x["enabled"]]
-
-    body += "<h2>System totals</h2><div class='cards'>"
-    body += _card("muted", len(monitored), "monitored resolvers")
-    body += _card("ok", healthy, "healthy")
-    body += _card("warn", unhealthy, "unhealthy / alert")
-    body += _card("warn", anomalies, "anomalies")
-    body += _card("bad", alerts, "possible poisoning")
-    body += _card("muted", counts.get("query_results", 0), "queries recorded")
+    body += "<h2>System totals</h2><div class='kpis'>"
+    body += kpi("ok" if monitored and len(responding) == len(monitored) else "warn",
+                KPI_ICONS["resolvers"],
+                "%d / %d" % (len(responding), len(monitored)),
+                "Resolvers responding", link("resolvers", live))
+    body += kpi("info", KPI_ICONS["domains"], str(_watchlist_size(storage)),
+                "Domains monitored", link("queries", live))
+    body += kpi("warn" if anomalies else "muted", KPI_ICONS["anomalies"],
+                str(anomalies), "Anomalies investigated", link("anomalies", live))
+    body += kpi("bad" if alerts else "ok", KPI_ICONS["uptime"], str(alerts),
+                "Possible poisoning events", link("poisoning", live))
     body += "</div>"
 
-    body += "<h2>Latest alerts</h2>"
-    rowsout = ""
-    for a in storage.recent_alerts(3):
-        rowsout += ("<tr><td class='small muted'>" + ts(a["confirmed_at"]) + "</td>"
-                    "<td><b>" + e(a["resolver"]) + "</b></td>"
-                    "<td>" + e(a["domain"]) + " <span class='chip'>" + e(a["rtype"])
-                    + "</span></td><td>"
-                    + badge(verdict.POSSIBLE, "bad", True) + "</td></tr>")
-    body += table(["When", "Resolver", "Domain", "Verdict"], rowsout, 4)
-    body += ("<p class='small muted'>Full evidence for every event is on the "
-             "<a href='" + link("poisoning", live) + "'>Cache Poisoning Detection</a> "
-             "page.</p>")
+    body += "<div class='split'><div class='col'>"
 
-    body += "<h2>Resolver status summary</h2>"
     rowsout = ""
     for x in rows:
         dim = " class='dim'" if x["status"] == NO_DATA else ""
-        rowsout += ("<tr" + dim + "><td><b>" + e(x["name"]) + "</b></td>"
+        tone = status_tone(x["status"])
+        correctness = (x["correctness"] * 100
+                       if isinstance(x["correctness"], (int, float)) else None)
+        rowsout += ("<tr" + dim + "><td><a href='"
+                    + link("resolvers", live, "?resolver=" + x["name"])
+                    + "'><b>" + e(x["name"]) + "</b></a> <span class='chip'>"
+                    + e((x["role"] or "").upper()) + "</span></td>"
                     "<td class='mono'>" + e(x["ip"]) + "</td>"
-                    "<td>" + badge(x["status"], status_tone(x["status"])) + "</td>"
-                    "<td>" + pct(x["availability"]) + "</td>"
+                    "<td><span class='st " + tone + "'>"
+                    "<span class='statusdot'></span>" + e(x["status"])
+                    + "</span></td>"
+                    "<td>" + bar(correctness, tone) + "</td>"
                     "<td>" + ms(x["latency"]) + "</td></tr>")
-    body += table(["Resolver", "IP", "Status", "Availability", "Avg latency"], rowsout, 5)
-    body += ("<p class='small muted'>Detail and per-resolver breakdown on the "
-             "<a href='" + link("resolvers", live) + "'>Resolver Health</a> page.</p>")
-    return body
+    body += ("<div class='panel flush'><h3>Resolver status summary</h3>"
+             + table(["Resolver", "IP address", "Status", "Correctness",
+                      "Avg response"], rowsout, 5)
+             + "<div class='foot'><a href='" + link("resolvers", live)
+             + "'>View all resolvers &rarr;</a></div></div>")
+
+    body += ("<div class='panel flush'><h3>Recent monitoring results</h3>"
+             + _recent_results(storage, live)
+             + "<div class='foot'><a href='" + link("queries", live)
+             + "'>View all measurements &rarr;</a></div></div>")
+
+    body += "</div><div class='col'>"
+
+    body += ("<div class='panel'><h3>Health dimension overview</h3>"
+             "<p class='sub'>Averaged across resolvers that have been measured. "
+             "Each ring is one stored metric, never a blended score.</p>"
+             + _health_dimensions(rows) + "</div>")
+
+    body += ("<div class='panel'><h3>Resolver response time (ms)</h3>"
+             + _performance_chart(storage, rows) + "</div>")
+
+    body += ("<div class='panel'><h3>Latest findings</h3>"
+             + _alert_feed(storage)
+             + "<p class='small' style='margin:12px 0 0;text-align:right'><a href='"
+             + link("anomalies", live) + "'>View all findings &rarr;</a></p></div>")
+
+    return body + "</div></div>"
 
 
 # -- 2. RESOLVER HEALTH -----------------------------------------------------
@@ -325,7 +526,7 @@ def poisoning(storage, live: bool) -> str:
                  + field("monitored_rcode") + " / " + field("auth_rcode") + "</dd>"
                  "<dt>TTL (mon / auth)</dt><dd class='mono'>" + ttl_line + "</dd>"
                  "<dt>Independent checks</dt><dd>" + str(len(stage3.get("queried") or []))
-                 + " trusted resolvers</dd>"
+                 + " cross-check resolvers</dd>"
                  "<dt>Persistence</dt><dd>"
                  + str(stage5.get("reproduced", "—")) + " of "
                  + str(stage5.get("repetitions", "—")) + " repeats</dd>"
@@ -335,22 +536,22 @@ def poisoning(storage, live: bool) -> str:
                  + badge(verdict.verdict_of(a["status"]),
                          verdict.tone_of(a["status"])) + "</dd></dl></div>")
 
-        trusted = ""
+        crosscheck = ""
         for name, recs in sorted(answers.items()):
-            trusted += ("<tr><td><b>" + e(name) + "</b></td>"
+            crosscheck += ("<tr><td><b>" + e(name) + "</b></td>"
                         "<td class='mono'>" + e(", ".join(recs) or "(none)") + "</td></tr>")
-        if not trusted and stage3.get("queried"):
-            trusted = ("<tr><td colspan='2' class='muted small'>"
+        if not crosscheck and stage3.get("queried"):
+            crosscheck = ("<tr><td colspan='2' class='muted small'>"
                        + e(", ".join(stage3["queried"])) +
                        " were queried; per-resolver answers were not retained for "
                        "this event.</td></tr>")
-        body += ("<div class='panel'><h3>Trusted resolver answers</h3>"
-                 + table(["Resolver", "Answer"], trusted, 2) +
+        body += ("<div class='panel'><h3>Cross-check resolver answers</h3>"
+                 + table(["Resolver", "Answer"], crosscheck, 2) +
                  "<p class='small muted'>" +
-                 ("At least one trusted resolver returned the same unexpected data, "
+                 ("At least one cross-check resolver returned the same unexpected data, "
                   "which argues against poisoning."
                   if stage3.get("corroborates_unexpected")
-                  else "No trusted resolver returned the unexpected data.") +
+                  else "No cross-check resolver returned the unexpected data.") +
                  "</p></div>")
         body += "</div>"
 
@@ -362,7 +563,7 @@ def poisoning(storage, live: bool) -> str:
                  "returned " + e(", ".join(stage2.get("records") or []) or "—")
                  + ("; ground truth was unstable" if stage2.get("unstable")
                     else "; ground truth was stable") + "</li>"
-                 "<li><b>Stage 3 &mdash; trusted resolvers</b>"
+                 "<li><b>Stage 3 &mdash; cross-check resolvers</b>"
                  + str(len(stage3.get("queried") or [])) + " queried; "
                  + ("they corroborate the unexpected data"
                     if stage3.get("corroborates_unexpected")
@@ -552,7 +753,7 @@ def anomalies(storage, live: bool, selected_id: str = "") -> str:
                  "<p class='small muted' style='margin:0'>" + e(text) + "</p></div>")
     body += "</div>"
     body += note("Only when every one of these is ruled out &mdash; the answer is "
-                 "absent from the authoritative servers, no trusted resolver "
+                 "absent from the authoritative servers, no cross-check resolver "
                  "corroborates it, and it persists across repeated queries &mdash; "
                  "is <b>" + verdict.POSSIBLE + "</b> reported.")
     return body
@@ -575,7 +776,7 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
     rtype = (params.get("rtype") or "A").strip().upper()
 
     body = note("This page performs a live check. It queries the selected resolver, "
-                "the trusted public resolvers, and the authoritative servers for the "
+                "the independent cross-check resolvers, and the authoritative servers for the "
                 "zone &mdash; walking Root &rarr; TLD &rarr; authoritative itself &mdash; "
                 "then compares the three.")
 
@@ -618,7 +819,7 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
              "<dt>TTL</dt><dd>" + e(result["ttl"] if result["ttl"] is not None else "—")
              + "</dd></dl></div>")
 
-    body += "<h2>Trusted resolver results</h2>"
+    body += "<h2>Cross-check resolver results</h2>"
     rowsout = ""
     for name, info in result["controls"].items():
         agree = "ok" if info["agrees"] else "warn"
@@ -628,6 +829,11 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
                     + "</td><td>" + badge("agrees with authoritative" if info["agrees"]
                                           else "differs", agree, True) + "</td></tr>")
     body += table(["Resolver", "IP", "Answer", "Agreement"], rowsout, 4)
+    body += ("<p class='small muted'>These are public recursive resolvers, "
+             "used only to corroborate. Ground truth is the authoritative "
+             "result below, walked Root &rarr; TLD &rarr; authoritative; a "
+             "cross-check resolver agreeing or differing never decides the "
+             "verdict on its own.</p>")
 
     body += "<h2>Authoritative result</h2>"
     body += ("<div class='panel'><dl class='kv'>"
@@ -654,7 +860,7 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
     final = result["verdict"]
     tone = verdict.verdict_tone(final)
     explain = {
-        verdict.NO_POISONING: "The monitored resolver agrees with the trusted "
+        verdict.NO_POISONING: "The monitored resolver agrees with the cross-check "
                               "resolvers and the authoritative servers.",
         verdict.POSSIBLE: "The monitored resolver differs from the independent "
                           "sources consistently. Possible &mdash; not proven.",
@@ -668,99 +874,206 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
 
 
 # -- 7. REPORTS -------------------------------------------------------------
+#
+# One report definition serves three outputs: the preview on this page, the PDF
+# and the CSV. They are rendered from the same `reporting.Report`, so a preview
+# can never show something the downloaded file does not contain.
 
-REPORT_KINDS = (
-    ("daily", "Daily report", "Measurements, anomalies and alerts from the last 24 hours."),
-    ("health", "Resolver health report", "Current health metrics for every resolver."),
-    ("anomaly", "DNS anomaly report", "Every anomaly with its classification and state."),
-    ("poisoning", "Cache-poisoning detection report",
-     "Confirmed events with the evidence behind each verdict."),
-)
+def _radio(name: str, value: str, label: str, current: str,
+           description: str = "") -> str:
+    checked = " checked" if value == current else ""
+    return ("<label class='choice'><input type='radio' name='" + name
+            + "' value='" + e(value) + "'" + checked + "><span><b>" + e(label)
+            + "</b>" + ("<i>" + e(description) + "</i>" if description else "")
+            + "</span></label>")
 
 
-def reports(storage, live: bool, kind: str = "") -> str:
-    body = "<div class='grid2'>"
-    for key, title, blurb in REPORT_KINDS:
-        href = link("reports", live, "?kind=" + key)
-        body += ("<div class='panel'><h3>" + e(title) + "</h3>"
-                 "<p class='small muted'>" + e(blurb) + "</p>"
-                 "<a class='btn' href='" + href + "'>Open</a></div>")
-    body += "</div>"
-    body += note("The static snapshot written by <code>python -m argus report</code> "
-                 "remains unchanged and still opens without a server.")
+def _checkbox(name: str, value: str, label: str, checked: bool) -> str:
+    return ("<label class='choice'><input type='checkbox' name='" + name
+            + "' value='" + e(value) + "'" + (" checked" if checked else "")
+            + "><span><b>" + e(label) + "</b></span></label>")
 
-    if not kind:
-        return body
 
-    titles = {k: t for k, t, _b in REPORT_KINDS}
-    if kind not in titles:
-        return body + note("Unknown report type.", "warn")
-    body += "<h2>" + e(titles[kind]) + "</h2>"
+def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
+                 flags: dict) -> str:
+    """The four-step generator, as plain HTML with no script.
 
-    if kind == "health":
-        rowsout = ""
-        for x in resolver_summaries(storage):
-            rowsout += ("<tr><td><b>" + e(x["name"]) + "</b></td>"
-                        "<td class='mono'>" + e(x["ip"]) + "</td>"
-                        "<td>" + badge(x["status"], status_tone(x["status"])) + "</td>"
-                        "<td>" + pct(x["availability"]) + "</td>"
-                        "<td>" + ms(x["latency"]) + "</td>"
-                        "<td>" + rate(x["correctness"]) + "</td>"
-                        "<td>" + e(x["freshness"] or "—") + "</td></tr>")
-        body += table(["Resolver", "IP", "Status", "Availability", "Avg latency",
-                       "Correctness", "Freshness"], rowsout, 7)
+    Two submit buttons: the default previews on this page, and the second uses
+    `formaction` to send the same values to the download route instead.
+    """
+    types = "".join(_radio("kind", key, title, kind, blurb)
+                    for key, title, blurb in reporting.REPORT_TYPES)
+    formats = "".join(_radio("format", f, f.upper(), fmt)
+                      for f in reporting.FORMATS)
+    options = "".join(_checkbox("options", key, label, flags.get(key, False))
+                      for key, label in reporting.OPTIONS)
 
-    elif kind == "anomaly":
-        rowsout = ""
-        for a in storage.recent_anomalies(200):
-            cls = a["classification"]
-            rowsout += ("<tr><td class='small muted'>" + ts(a["observed_at"]) + "</td>"
-                        "<td>" + e(a["resolver"]) + "</td>"
-                        "<td>" + e(a["domain"]) + " (" + e(a["rtype"]) + ")</td>"
-                        "<td>" + badge(cls, verdict.tone_of(cls), True) + "</td>"
-                        "<td>" + badge(verdict.verdict_of(cls),
-                                       verdict.tone_of(cls), True) + "</td>"
-                        "<td class='wrap small'>" + e(a["reason"] or "—") + "</td></tr>")
-        body += table(["When", "Resolver", "Domain", "Classification", "Verdict",
-                       "Reason"], rowsout, 6)
+    download = ("<button type='submit' class='primary' formaction='"
+                + REPORT_DOWNLOAD + "'>Generate &amp; download</button>"
+                if live else
+                "<span class='muted small'>Downloads need the built-in server: "
+                "<code>python -m argus dashboard</code></span>")
 
-    elif kind == "poisoning":
-        rowsout = ""
-        for a in storage.recent_alerts(200):
-            ev = _evidence(a["evidence"])
-            s5 = ev.get("stage5_persistence") or {}
-            rowsout += ("<tr><td class='small muted'>" + ts(a["confirmed_at"]) + "</td>"
-                        "<td>" + e(a["resolver"]) + "</td>"
-                        "<td>" + e(a["domain"]) + " (" + e(a["rtype"]) + ")</td>"
-                        "<td>" + badge(verdict.POSSIBLE, "bad", True) + "</td>"
-                        "<td>" + str(s5.get("reproduced", "—")) + "/"
-                        + str(s5.get("repetitions", "—")) + "</td>"
-                        "<td class='wrap small'>" + e(ev.get("decision") or "—")
-                        + "</td></tr>")
-        body += table(["When", "Resolver", "Domain", "Verdict", "Persistence",
-                       "Decision"], rowsout, 6)
+    return ("<form class='builder' method='get' action='"
+            + link("reports", live) + "'>"
+            "<div class='step'><h4>1. Select report type</h4>"
+            "<div class='choices'>" + types + "</div></div>"
+            "<div class='step'><h4>2. Select time period</h4>"
+            "<div class='field'><label for='since'>From</label>"
+            "<input id='since' name='since' type='date' value='" + e(since)
+            + "'></div>"
+            "<div class='field'><label for='until'>To</label>"
+            "<input id='until' name='until' type='date' value='" + e(until)
+            + "'></div>"
+            "<p class='hint'>Leave both empty for every measurement on record."
+            "</p>"
+            "<h4 style='margin-top:16px'>3. Select format</h4>"
+            "<div class='choices row'>" + formats + "</div></div>"
+            "<div class='step'><h4>4. Options</h4>"
+            "<div class='choices'>" + options + "</div>"
+            "<div class='builder-actions'>"
+            "<button type='submit'>Preview</button>" + download
+            + "</div></div></form>")
 
-    else:  # daily
-        import time as _time
-        since = _time.time() - 86400
-        total = storage.count_events(since=since)
-        counts = verdict.summarise(
-            [r["comparison_classification"]
-             for r in storage.search_events(limit=5000, since=since)])
-        body += "<div class='cards'>"
-        body += _card("muted", total, "measurements (24 h)")
-        body += _card("ok", counts[verdict.NO_POISONING], "no poisoning detected")
-        body += _card("warn", counts[verdict.INCONCLUSIVE], "inconclusive")
-        body += _card("bad", counts[verdict.POSSIBLE], "possible poisoning")
-        body += "</div>"
-        rowsout = ""
-        for a in storage.recent_alerts(20):
-            if a["confirmed_at"] and a["confirmed_at"] >= since:
-                rowsout += ("<tr><td class='small muted'>" + ts(a["confirmed_at"])
-                            + "</td><td>" + e(a["resolver"]) + "</td>"
-                            "<td>" + e(a["domain"]) + "</td>"
-                            "<td>" + badge(verdict.POSSIBLE, "bad", True)
-                            + "</td></tr>")
-        body += "<h2>Alerts in the last 24 hours</h2>"
-        body += table(["When", "Resolver", "Domain", "Verdict"], rowsout, 4)
+
+def _preview(report, live: bool) -> str:
+    """Render a built report as HTML, section by section.
+
+    Deliberately the same section list the PDF renderer walks, so what is shown
+    here is what a download contains.
+    """
+    out = ""
+    for index, section in enumerate(report.sections, start=1):
+        if section.heading:
+            out += "<h3>" + str(index) + ". " + e(section.heading) + "</h3>"
+        if section.note:
+            out += "<p class='sub'>" + e(section.note) + "</p>"
+
+        if section.kind == "tiles":
+            out += "<div class='cards'>"
+            for label, value, tone in section.payload:
+                out += _card(tone, e(value), label)
+            out += "</div>"
+
+        elif section.kind == "bars":
+            rows = ""
+            for label, value, tone in section.payload:
+                rows += ("<tr><td><b>" + e(label) + "</b></td>"
+                         "<td style='width:70%'>" + bar(value, tone) + "</td></tr>")
+            out += table(["", ""], rows, 2)
+
+        elif section.kind == "stack":
+            total = sum(v for _l, v, _t in section.payload) or 1
+            rows = ""
+            for label, value, tone in section.payload:
+                rows += ("<tr><td>" + badge(label, tone, True) + "</td>"
+                         "<td class='mono'>" + "{:,}".format(int(value)) + "</td>"
+                         "<td style='width:60%'>"
+                         + bar(value / total * 100, tone) + "</td></tr>")
+            out += table(["Result", "Count", "Share"], rows, 3)
+
+        elif section.kind == "table":
+            spec = section.payload
+            rows = ""
+            for row in spec["rows"]:
+                cells = ""
+                for cell in row:
+                    if isinstance(cell, tuple):
+                        text, tone = cell
+                        cells += "<td>" + badge(text, tone, True) + "</td>"
+                    else:
+                        cells += "<td>" + e(cell) + "</td>"
+                rows += "<tr>" + cells + "</tr>"
+            out += table([e(h) for h in spec["headers"]], rows,
+                         len(spec["headers"]))
+
+        elif section.kind == "kv":
+            out += "<div class='panel'><dl class='kv'>"
+            for label, value in section.payload:
+                out += "<dt>" + e(label) + "</dt><dd>" + e(value) + "</dd>"
+            out += "</dl></div>"
+
+        elif section.kind == "text":
+            out += note(e(str(section.payload)))
+    return out
+
+
+def _saved_reports(live: bool) -> str:
+    rows = ""
+    for item in reporting.saved_reports():
+        href = REPORT_FILE + "?name=" + e(item["name"])
+        size = ("%.0f KB" % (item["size"] / 1024.0) if item["size"] >= 1024
+                else "%d B" % item["size"])
+        name = ("<a href='" + href + "'>" + e(item["name"]) + "</a>"
+                if live else e(item["name"]))
+        rows += ("<tr><td>" + name + "</td>"
+                 "<td class='small'>" + e(item["kind"]) + "</td>"
+                 "<td><span class='chip'>" + e(item["format"]) + "</span></td>"
+                 "<td class='small muted'>" + ts(item["modified"]) + "</td>"
+                 "<td class='small muted'>" + size + "</td></tr>")
+    body = table(["File", "Report", "Format", "Generated", "Size"], rows, 5)
+    if not live and rows:
+        body += note("Open the files directly from the <code>reports/</code> "
+                     "folder, or start <code>python -m argus dashboard</code> "
+                     "to download them from here.")
+    return body
+
+
+def _schedule_panel() -> str:
+    """How to produce reports on a schedule.
+
+    Argus has no scheduler of its own for this, and adding one would duplicate
+    something every operating system already does well, so the page hands over
+    the exact line to install instead of pretending to own it.
+    """
+    return ("<div class='panel'><h3>Scheduled reports</h3>"
+            "<p class='sub'>Argus does not run its own report scheduler. On "
+            "Linux, <code>cron</code> produces the same files on any cadence "
+            "&mdash; this line writes a weekly summary every Monday at 06:00, "
+            "into <code>reports/</code>:</p>"
+            # One line, deliberately: a crontab entry cannot be continued
+            # across lines, so a wrapped command would be copied and then fail.
+            "<pre class='cmd'>0 6 * * 1 cd /path/to/argus &amp;&amp; "
+            ".venv/bin/python -m argus export --type summary --format pdf "
+            "--days 7 --no-open</pre>"
+            "<p class='sub' style='margin-bottom:0'>Install it with "
+            "<code>crontab -e</code>. Use <code>--type</code> and "
+            "<code>--days</code> to match any of the report types above.</p>"
+            "</div>")
+
+
+def reports(storage, live: bool, params: dict) -> str:
+    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
+    kind = get("kind") or "summary"
+    if kind not in reporting.REPORT_TITLES:
+        kind = "summary"
+    fmt = get("format") if get("format") in reporting.FORMATS else "pdf"
+    since_raw, until_raw = get("since"), get("until")
+
+    # An untouched form submits no checkboxes at all, which is indistinguishable
+    # from every option being cleared. The first visit therefore uses the
+    # defaults, and only a real submission is read as a set of choices.
+    submitted = any(k in params for k in ("kind", "format", "since", "until"))
+    flags = (reporting.resolve_options(params.get("options_list") or [])
+             if submitted else dict(reporting.DEFAULT_OPTIONS))
+
+    body = ("<div class='split reportsplit'><div class='col'>"
+            "<div class='panel'><h3>Generate a report</h3>"
+            + _report_form(live, kind, since_raw, until_raw, fmt, flags)
+            + "</div></div><div class='col'>"
+            "<div class='panel flush'><h3>Saved reports</h3>"
+            + _saved_reports(live) + "</div>"
+            + _schedule_panel() + "</div></div>")
+
+    report = reporting.build(
+        storage, kind,
+        since=reporting.parse_day(since_raw),
+        until=reporting.parse_day(until_raw, end_of_day=True),
+        vantage="", options=flags)
+
+    body += ("<h2>Preview &mdash; " + e(report.title) + "</h2>"
+             + note("Covering <b>" + e(report.period) + "</b>. The download "
+                    "contains exactly these sections; the PDF adds page "
+                    "headers and numbering.")
+             + _preview(report, live))
     return body

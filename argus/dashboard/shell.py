@@ -6,12 +6,14 @@ stylesheet, and the value formatters. It reads nothing from the database itself.
 
 Every page is a single self-contained HTML file with no script and no external
 asset, so it opens from the filesystem, over the built-in server, or from a
-printed PDF with identical results.
+printed PDF with identical results. Charts and gauges are therefore inline SVG
+drawn here, not a charting library.
 """
 
 from __future__ import annotations
 
 import html
+import math
 import time
 
 # key, static filename, server path, title, purpose blurb
@@ -30,7 +32,7 @@ PAGES = (
      "Differences under review, and the legitimate explanations each was "
      "tested against."),
     ("verification", "verification.html", "/verification", "Independent Verification",
-     "Query one resolver against trusted resolvers and the authoritative "
+     "Query one resolver against cross-check resolvers and the authoritative "
      "hierarchy, live."),
     ("reports", "reports.html", "/reports", "Reports",
      "Summaries suitable for inclusion in a written report."),
@@ -164,16 +166,197 @@ def note(text: str, tone: str = "info") -> str:
     return '<p class="note ' + tone + '">' + text + "</p>"
 
 
-# -- page chrome ------------------------------------------------------------
+# -- summary components -----------------------------------------------------
 
-def _nav(active: str, live: bool) -> str:
-    out = ""
-    for key, _file, _path, title, _blurb in PAGES:
-        cls = "navlink active" if key == active else "navlink"
-        out += ('<a class="' + cls + '" href="' + link(key, live) + '">'
-                + e(title) + "</a>")
+def bar(value, tone: str = "ok", suffix: str = "%") -> str:
+    """A proportion drawn as a track and a fill, with the number beside it.
+
+    `value` is a percentage 0-100, or None when the metric was never measured —
+    an unmeasured metric shows an empty track rather than a misleading zero.
+    """
+    if not isinstance(value, (int, float)):
+        return ('<div class="bar"><div class="track"></div>'
+                '<span class="pv muted">&mdash;</span></div>')
+    width = max(0.0, min(100.0, float(value)))
+    return ('<div class="bar"><div class="track">'
+            '<div class="fill ' + tone + '" style="width:%.1f%%"></div></div>'
+            '<span class="pv">%.0f%s</span></div>' % (width, value, suffix))
+
+
+def gauge(value, label: str, tone: str = "ok") -> str:
+    """One ring gauge: a proportion of a circle, the number, and a caption.
+
+    `value` is 0-100 or None. None draws the empty ring and an em dash, because
+    "not measured" and "zero percent" are different findings.
+    """
+    radius, size = 33.0, 88.0
+    circumference = 2 * math.pi * radius
+    known = isinstance(value, (int, float))
+    fraction = max(0.0, min(1.0, (value or 0) / 100.0)) if known else 0.0
+    centre = size / 2
+    return (
+        '<div class="gauge"><svg viewBox="0 0 %(s)g %(s)g" width="%(s)g" height="%(s)g" '
+        'role="img" aria-label="%(alt)s">'
+        '<circle cx="%(c)g" cy="%(c)g" r="%(r)g" fill="none" stroke="currentColor" '
+        'stroke-opacity=".15" stroke-width="9"/>'
+        '<circle cx="%(c)g" cy="%(c)g" r="%(r)g" fill="none" class="arc %(tone)s" '
+        'stroke-width="9" stroke-linecap="round" '
+        'stroke-dasharray="%(on).2f %(off).2f" '
+        'transform="rotate(-90 %(c)g %(c)g)"/>'
+        '<text x="%(c)g" y="%(c)g" class="gv" text-anchor="middle" '
+        'dominant-baseline="central">%(txt)s</text>'
+        "</svg><div class='gl'>%(label)s</div></div>"
+        % {"s": size, "c": centre, "r": radius, "tone": tone,
+           "on": circumference * fraction, "off": circumference * (1 - fraction),
+           "txt": ("%.0f%%" % value) if known else "&mdash;",
+           "label": e(label),
+           "alt": "%s: %s" % (label, ("%.0f percent" % value) if known else "not measured")}
+    )
+
+
+# Series colours for the performance chart. Fixed hexes rather than theme
+# tokens: an SVG stroke cannot resolve a variable that only exists per theme,
+# and these six read against both the light and the dark panel.
+SERIES_COLOURS = ("#2f7fd4", "#1f9d62", "#d08316", "#cc4b3c", "#8257d4", "#0e9aa7")
+
+
+def linechart(series, width: int = 600, height: int = 200) -> str:
+    """A multi-series time chart drawn from stored metric history.
+
+    `series` is a list of {"name", "colour", "points": [(epoch, value), ...]}.
+    One scale places every mark, tick and label; the axis text takes its colour
+    from the theme so it reads on either ground.
+    """
+    points = [p for s in series for p in s["points"]]
+    if len(points) < 2:
+        return ("<p class='empty'>Not enough history yet &mdash; the chart needs "
+                "at least two recorded sweeps.</p>")
+
+    xs = [p[0] for p in points]
+    x0, x1 = min(xs), max(xs)
+    if x1 <= x0:
+        x1 = x0 + 1
+    # Scale to the 95th percentile, not the maximum. Response times are mostly
+    # tens of milliseconds with the occasional multi-second timeout, and one
+    # such spike flattens every ordinary line onto the axis. Points above the
+    # top are drawn on it and counted underneath, so nothing is hidden.
+    values = sorted(p[1] for p in points)
+    top = values[max(0, int(round(0.95 * (len(values) - 1))))] or values[-1] or 1.0
+    # Round the axis up to a readable step so every gridline names a real value.
+    step = 10 ** math.floor(math.log10(top / 2 or 1))
+    ymax = math.ceil(top / step) * step or 1.0
+    clipped = sum(1 for v in values if v > ymax)
+
+    pad_l, pad_r, pad_t, pad_b = 46, 14, 12, 26
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+
+    def sx(x):
+        return pad_l + (x - x0) / (x1 - x0) * plot_w
+
+    def sy(y):
+        return pad_t + (1 - min(1.0, y / ymax)) * plot_h
+
+    out = ('<svg class="chart" viewBox="0 0 %d %d" preserveAspectRatio="xMidYMid meet" '
+           'role="img" aria-label="Resolver response time over the recorded window">'
+           % (width, height))
+
+    for i in range(5):                                   # horizontal grid + y labels
+        value = ymax * i / 4
+        y = sy(value)
+        out += ('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="currentColor" '
+                'stroke-opacity=".14"/>' % (pad_l, y, width - pad_r, y))
+        out += ('<text x="%.1f" y="%.1f" class="ax" text-anchor="end" '
+                'dominant-baseline="central">%g</text>' % (pad_l - 8, y, round(value)))
+
+    span_hours = (x1 - x0) / 3600.0
+    fmt = "%H:%M" if span_hours <= 36 else "%m-%d"
+    for i in range(4):                                   # x labels
+        at = x0 + (x1 - x0) * i / 3
+        anchor = "start" if i == 0 else ("end" if i == 3 else "middle")
+        out += ('<text x="%.1f" y="%.1f" class="ax" text-anchor="%s">%s</text>'
+                % (sx(at), height - 8, anchor,
+                   e(time.strftime(fmt, time.localtime(at)))))
+
+    for s in series:
+        pts = sorted(s["points"])
+        if len(pts) < 2:
+            continue
+        path = " ".join("%.1f,%.1f" % (sx(x), sy(y)) for x, y in pts)
+        out += ('<polyline points="%s" fill="none" stroke="%s" stroke-width="1.8" '
+                'stroke-linejoin="round" stroke-linecap="round"/>'
+                % (path, s["colour"]))
+        last_x, last_y = pts[-1]
+        out += ('<circle cx="%.1f" cy="%.1f" r="2.8" fill="%s"/>'
+                % (sx(last_x), sy(last_y), s["colour"]))
+
+    out += "</svg>"
+
+    legend = "".join('<span><i style="background:%s"></i>%s</span>'
+                     % (s["colour"], e(s["name"])) for s in series if s["points"])
+    out += '<div class="legend">' + legend + "</div>"
+    if clipped:
+        out += ("<p class='sub' style='margin:7px 0 0'>%d point%s above %g ms "
+                "%s drawn on the top gridline; the axis follows the 95th "
+                "percentile so ordinary response times stay readable.</p>"
+                % (clipped, "" if clipped == 1 else "s", ymax,
+                   "is" if clipped == 1 else "are"))
     return out
 
+
+def kpi(tone: str, icon: str, value: str, label: str, href: str = "") -> str:
+    """A headline figure, its label, and the page that explains it."""
+    inner = ('<span class="ic ' + tone + '">' + icon + "</span>"
+             '<span class="tx"><b class="n">' + value + '</b>'
+             '<span class="l">' + e(label) + "</span></span>")
+    if not href:
+        return '<div class="kpi ' + tone + '">' + inner + "</div>"
+    return ('<a class="kpi ' + tone + '" href="' + href + '">' + inner
+            + '<span class="go" aria-hidden="true">' + ICON_CHEVRON + "</span></a>")
+
+
+# -- iconography ------------------------------------------------------------
+#
+# Line icons drawn at 20px on a 24-unit grid, inline so a page stays a single
+# self-contained file.
+
+def _icon(paths: str, size: int = 20) -> str:
+    return ('<svg width="%d" height="%d" viewBox="0 0 24 24" fill="none" '
+            'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+            'stroke-linejoin="round" aria-hidden="true">%s</svg>' % (size, size, paths))
+
+
+NAV_ICONS = {
+    "overview": _icon('<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/>'
+                      '<path d="M9.5 21v-6h5v6"/>', 18),
+    "resolvers": _icon('<rect x="3" y="4" width="18" height="6" rx="1.6"/>'
+                       '<rect x="3" y="14" width="18" height="6" rx="1.6"/>'
+                       '<path d="M7 7h.01M7 17h.01"/>', 18),
+    "poisoning": _icon('<path d="M12 3 4.5 6v6c0 4.6 3.1 7.9 7.5 9 4.4-1.1 7.5-4.4 '
+                       '7.5-9V6z"/><path d="M12 8.5v4"/><path d="M12 16h.01"/>', 18),
+    "queries": _icon('<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>', 18),
+    "anomalies": _icon('<path d="M3 13h4l2.5-7 4 14L16 13h5"/>', 18),
+    "verification": _icon('<circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 '
+                          '4.5-5"/>', 18),
+    "reports": _icon('<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>'
+                     '<path d="M9 12h6M9 16h6"/>', 18),
+}
+
+ICON_CHEVRON = _icon('<path d="m9 5 7 7-7 7"/>', 16)
+ICON_CLOCK = _icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 17)
+ICON_PLAY = _icon('<path d="M7 4.5v15l13-7.5z"/>', 16)
+ICON_REPORT = _icon('<rect x="3" y="5" width="18" height="16" rx="2"/>'
+                    '<path d="M3 10h18M8 3v4M16 3v4"/>', 16)
+
+KPI_ICONS = {
+    "resolvers": _icon('<circle cx="12" cy="12" r="9"/><path d="m8.2 12 2.6 2.6 '
+                       '5-5.4"/>', 22),
+    "domains": _icon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
+                     '<path d="M12 3c2.6 2.6 2.6 15.4 0 18-2.6-2.6-2.6-15.4 0-18z"/>', 22),
+    "anomalies": _icon('<path d="M12 3.5 21 20H3z"/><path d="M12 10v4"/>'
+                       '<path d="M12 17h.01"/>', 22),
+    "uptime": _icon('<circle cx="12" cy="12" r="9"/><path d="M12 6.5V12l3.5 2"/>', 22),
+}
 
 EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
        'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" '
@@ -183,43 +366,75 @@ EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
        '<circle cx="24" cy="24" r="1.8" fill="currentColor" stroke="none"/></svg>')
 
 
+# -- page chrome ------------------------------------------------------------
+
+def _nav(active: str, live: bool, alerts: int = 0) -> str:
+    out = ""
+    for key, _file, _path, title, _blurb in PAGES:
+        cls = "navlink active" if key == active else "navlink"
+        count = ('<span class="navcount">' + str(alerts) + "</span>"
+                 if key == "poisoning" and alerts else "")
+        out += ('<a class="' + cls + '" href="' + link(key, live) + '">'
+                + NAV_ICONS.get(key, "") + "<span>" + e(title) + "</span>"
+                + count + "</a>")
+    return out
+
+
+def pagehead(title: str, blurb: str, actions: str = "") -> str:
+    """The title block at the top of a page, optionally with action buttons."""
+    return ('<div class="pagehead"><div class="pt">'
+            '<h1 class="ptitle">' + title + '</h1>'
+            '<p class="pblurb">' + blurb + "</p></div>"
+            + ('<div class="actions">' + actions + "</div>" if actions else "")
+            + "</div>")
+
+
 def page(active: str, vantage: str, body: str, live: bool = False,
-         refresh_seconds: int = 0, scope: str = "") -> str:
+         refresh_seconds: int = 0, scope: str = "", alerts: int = 0,
+         head: str = "") -> str:
     """Wrap page content in the shared chrome and return a complete document.
 
     `scope` is an optional summary of what is being monitored -- resolver and
     domain counts, and the interval -- so a screenshot of any page carries
-    enough context to be read on its own.
+    enough context to be read on its own. `alerts` puts the confirmed-event
+    count on the navigation, so it is visible from every page. `head` lets a
+    page replace the default title block with one of its own; every page still
+    gets a title block if it supplies nothing.
     """
     key, _file, _path, title, blurb = PAGE_BY_KEY[active]
     meta_refresh = ('<meta http-equiv="refresh" content="%d">' % int(refresh_seconds)
                     if refresh_seconds and refresh_seconds > 0 else "")
     return _DOC.format(
-        css=_CSS, meta_refresh=meta_refresh, eye=EYE,
-        nav=_nav(active, live), title=e(title), blurb=e(blurb),
+        css=_CSS, meta_refresh=meta_refresh, eye=EYE, clock=ICON_CLOCK,
+        nav=_nav(active, live, alerts), title=e(title),
+        pagehead=head or pagehead(e(title), e(blurb)),
         vantage=e(vantage), scope=(" &middot; " + e(scope)) if scope else "",
         generated=time.strftime("%Y-%m-%d %H:%M:%S"),
+        zone=e(time.strftime("%Z") or "local"),
         body=body,
     )
 
 
 _CSS = """
 :root{--bg:#f2f4f7;--panel:#fff;--ink:#16202b;--muted:#5f6b7a;--line:#dde3ea;
---rail:#12304f;--railink:#c9dcef;--railactive:#fff;--accent:#1f5c96;
+--rail:#0f2942;--rail2:#0b2035;--railink:#c9dcef;--railactive:#fff;--accent:#1f5c96;
 --ok:#116b3a;--okbg:#e5f4ec;--warn:#8a5a05;--warnbg:#fdf2dd;
 --bad:#b0271f;--badbg:#fdebe9;--grey:#5f6b7a;--greybg:#eceff3;
+--info:#1f5c96;--infobg:#e6eff8;--violet:#6d4bc4;--violetbg:#eee9fa;
 --shadow:0 1px 2px rgba(16,24,40,.05),0 3px 10px rgba(16,24,40,.05)}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
 --bg:#0b1016;--panel:#151b23;--ink:#e4e9ef;--muted:#8b97a5;--line:#232c37;
---rail:#0d1720;--railink:#8fa8c2;--railactive:#fff;--accent:#7fb0e0;
+--rail:#0b131c;--rail2:#080f16;--railink:#8fa8c2;--railactive:#fff;--accent:#7fb0e0;
 --ok:#4ade80;--okbg:#0e2419;--warn:#fbbf24;--warnbg:#2a2210;
 --bad:#f87171;--badbg:#2b1315;--grey:#8b97a5;--greybg:#1c232c;
+--info:#7fb0e0;--infobg:#122334;--violet:#a78bfa;--violetbg:#1e1930;
 --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3)}}
 :root[data-theme="dark"]{
 --bg:#0b1016;--panel:#151b23;--ink:#e4e9ef;--muted:#8b97a5;--line:#232c37;
---rail:#0d1720;--railink:#8fa8c2;--railactive:#fff;--accent:#7fb0e0;
+--rail:#0b131c;--rail2:#080f16;--railink:#8fa8c2;--railactive:#fff;--accent:#7fb0e0;
 --ok:#4ade80;--okbg:#0e2419;--warn:#fbbf24;--warnbg:#2a2210;
 --bad:#f87171;--badbg:#2b1315;--grey:#8b97a5;--greybg:#1c232c;
+--info:#7fb0e0;--infobg:#122334;--violet:#a78bfa;--violetbg:#1e1930;
 --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
@@ -228,42 +443,90 @@ Roboto,Helvetica,Arial,sans-serif;
 -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
 text-rendering:optimizeLegibility}
 /* Digits line up in every column: counts, latencies, percentages. */
-td,th,.card .n,.metric .v,.pager{font-variant-numeric:tabular-nums}
-a{color:var(--accent)}
+td,th,.card .n,.kpi .n,.metric .v,.pager,.bar .pv{font-variant-numeric:tabular-nums}
+a{color:var(--accent);transition:color .14s ease}
 .layout{display:flex;min-height:100vh;align-items:stretch}
 
 /* sidebar */
-.rail{width:212px;flex:none;background:var(--rail);color:var(--railink);
-padding:20px 0 30px;display:flex;flex-direction:column}
-.brand{display:flex;align-items:center;gap:11px;padding:0 18px 18px;
-border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:12px}
-.eye{width:31px;height:31px;flex:none;color:#7fb0e0}
-.brand b{color:#fff;font-size:15.5px;line-height:1.25;font-weight:650;
-letter-spacing:-.01em}
-.navlink{display:block;padding:10px 18px;color:var(--railink);text-decoration:none;
-font-size:13.5px;border-left:3px solid transparent;
+.rail{width:238px;flex:none;color:var(--railink);padding:22px 0 22px;
+display:flex;flex-direction:column;
+background:linear-gradient(178deg,var(--rail) 0%,var(--rail2) 100%)}
+.brand{display:flex;align-items:center;gap:12px;padding:0 20px 18px;
+border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:14px}
+.eye{width:34px;height:34px;flex:none;color:#7fb0e0}
+.brand .wm{min-width:0}
+.brand .wm b{display:block;color:#fff;font-size:23px;font-weight:700;
+letter-spacing:.055em;line-height:1}
+.brand .wm span{display:block;font-size:10px;letter-spacing:.1em;
+text-transform:uppercase;color:var(--railink);opacity:.85;margin-top:4px}
+.navlink{display:flex;align-items:center;gap:11px;padding:10px 20px;
+color:var(--railink);text-decoration:none;font-size:13.5px;
+border-left:3px solid transparent;
 transition:background .16s ease,color .16s ease,border-color .16s ease}
+.navlink svg{flex:none;opacity:.85}
 .navlink:hover{background:rgba(255,255,255,.07);color:#fff}
+.navlink:hover svg{opacity:1}
 .navlink:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .navlink.active{background:rgba(255,255,255,.1);color:var(--railactive);
-border-left-color:var(--accent);font-weight:600}
-.railfoot{margin-top:auto;padding:14px 18px 0;font-size:10.5px;color:var(--railink);
-opacity:.75;line-height:1.6}
+border-left-color:#7fb0e0;font-weight:600}
+.navlink.active svg{opacity:1;color:#7fb0e0}
+.navcount{margin-left:auto;background:#c0392b;color:#fff;font-size:10.5px;
+font-weight:700;min-width:19px;height:19px;border-radius:999px;padding:0 6px;
+display:inline-flex;align-items:center;justify-content:center}
+.railfoot{margin-top:auto;padding:22px 20px 0;margin:auto 14px 0;
+border-top:1px solid rgba(255,255,255,.09)}
+.railfoot .quote{color:#fff;opacity:.9;font-size:13px;line-height:1.5;
+font-style:italic}
+.railfoot .caveat{font-size:10.5px;color:var(--railink);opacity:.7;
+line-height:1.6;margin-top:12px}
 
 /* main column */
 .main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
 .topbar{background:var(--panel);border-bottom:1px solid var(--line);
-padding:14px 26px;position:sticky;top:0;z-index:2}
-.topbar h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.012em}
-.topbar .tagline{color:var(--ink);opacity:.72;font-size:12.5px;margin-top:3px;
-max-width:78ch;line-height:1.45}
-.topbar .meta{color:var(--muted);font-size:11.5px;margin-top:5px}
-.content{padding:24px 26px 56px;max-width:1180px}
-.ptitle{margin:0 0 5px;font-size:22px;font-weight:650;letter-spacing:-.018em;
+padding:12px 26px;position:sticky;top:0;z-index:2;display:flex;
+flex-wrap:wrap;gap:14px 24px;align-items:center;justify-content:space-between}
+.topbar .tagline{font-size:14.5px;font-style:italic;color:var(--ink);
+letter-spacing:-.005em}
+.topbar .pillars{color:var(--muted);font-size:11.5px;margin-top:3px;
+letter-spacing:.02em}
+.topbar .stamp{display:flex;align-items:center;gap:9px;color:var(--muted);
+font-size:11.5px;line-height:1.45}
+.topbar .stamp svg{flex:none;opacity:.7}
+.topbar .stamp b{display:block;color:var(--ink);font-size:13px;font-weight:600;
+font-variant-numeric:tabular-nums}
+.content{padding:24px 26px 40px;max-width:1280px;flex:1 1 auto}
+
+/* page head */
+.pagehead{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:flex-start;
+justify-content:space-between;margin-bottom:22px}
+.pagehead .pt{min-width:0;flex:1 1 340px}
+.ptitle{margin:0 0 5px;font-size:26px;font-weight:650;letter-spacing:-.022em;
 text-wrap:balance}
-.pblurb{margin:0 0 24px;color:var(--muted);font-size:13.5px;max-width:68ch;
+.pblurb{margin:0;color:var(--muted);font-size:13.5px;max-width:68ch;
 line-height:1.55}
-h2{font-size:11px;margin:32px 0 11px;color:var(--muted);font-weight:700;
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.action{display:inline-flex;align-items:center;gap:8px;font-size:13px;
+font-weight:600;padding:9px 16px;border-radius:8px;text-decoration:none;
+border:1px solid var(--line);background:var(--panel);color:var(--ink);
+box-shadow:var(--shadow);transition:border-color .16s ease,background .16s ease}
+.action:hover{border-color:var(--accent)}
+.action.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.action.primary:hover{filter:brightness(1.08)}
+.action:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details.runbox{margin:0 0 20px}
+details.runbox>summary{list-style:none;cursor:pointer;display:inline-flex}
+details.runbox>summary::-webkit-details-marker{display:none}
+details.runbox .body{background:var(--panel);border:1px solid var(--line);
+border-radius:10px;padding:14px 16px;margin-top:10px;box-shadow:var(--shadow);
+max-width:70ch;font-size:13px;color:var(--muted)}
+details.runbox .body p{margin:0 0 8px}
+details.runbox .body p:last-child{margin:0}
+details.runbox pre{margin:0 0 10px;background:var(--bg);border:1px solid var(--line);
+border-radius:7px;padding:10px 12px;overflow-x:auto;color:var(--ink);
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+
+/* section headings */
+h2{font-size:11px;margin:30px 0 11px;color:var(--muted);font-weight:700;
 text-transform:uppercase;letter-spacing:.1em}
 h2:first-of-type{margin-top:0}
 
@@ -287,7 +550,38 @@ margin:0 0 18px;max-width:80ch}
 .note code{font-family:ui-monospace,Consolas,monospace;background:rgba(127,127,127,.14);
 padding:1px 5px;border-radius:4px}
 
-/* stat cards */
+/* KPI tiles */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(212px,1fr));gap:14px}
+.kpi{display:flex;align-items:center;gap:14px;padding:15px 16px;border-radius:12px;
+background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);
+text-decoration:none;color:inherit;
+transition:border-color .16s ease,transform .16s ease}
+a.kpi:hover{border-color:var(--accent);transform:translateY(-1px)}
+a.kpi:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kpi .ic{width:46px;height:46px;border-radius:50%;flex:none;display:grid;
+place-items:center}
+.kpi .tx{min-width:0}
+.kpi .n{display:block;font-size:25px;font-weight:700;letter-spacing:-.03em;
+line-height:1.15}
+.kpi .l{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.kpi .go{margin-left:auto;color:var(--muted);opacity:.55;flex:none;display:flex}
+.kpi.ok .ic{background:var(--okbg);color:var(--ok)}
+.kpi.ok .n{color:var(--ok)}
+.kpi.bad .ic{background:var(--badbg);color:var(--bad)}
+.kpi.bad .n{color:var(--bad)}
+.kpi.warn .ic{background:var(--warnbg);color:var(--warn)}
+.kpi.warn .n{color:var(--warn)}
+.kpi.info .ic{background:var(--infobg);color:var(--info)}
+.kpi.muted .ic{background:var(--greybg);color:var(--grey)}
+.kpi.muted .n{color:var(--muted)}
+
+/* two-column dashboard split */
+.split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media(max-width:1120px){.split{grid-template-columns:1fr}}
+
+/* cards / panels */
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:12px;
 margin-bottom:8px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -295,9 +589,102 @@ padding:13px 15px 15px;box-shadow:var(--shadow)}
 .card .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
 color:var(--muted);font-weight:650}
 .card .n{font-size:28px;font-weight:700;margin-top:7px;letter-spacing:-.025em;
-line-height:1.15;font-variant-numeric:tabular-nums}
+line-height:1.15}
 .card.ok .n{color:var(--ok)}.card.warn .n{color:var(--warn)}
 .card.bad .n{color:var(--bad)}.card.muted .n{color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:15px 17px;box-shadow:var(--shadow)}
+.panel h3{margin:0 0 9px;font-size:13px;font-weight:650}
+.panel.flush{padding:0;overflow:hidden}
+.panel.flush h3{padding:14px 17px 11px;margin:0;border-bottom:1px solid var(--line)}
+.panel.flush .tablewrap{border:none;border-radius:0;box-shadow:none;margin:0}
+.panel .foot{padding:11px 17px;border-top:1px solid var(--line);text-align:right}
+.panel .foot a{font-size:12.5px;font-weight:600;text-decoration:none}
+.panel .foot a:hover{text-decoration:underline}
+.panel .sub{margin:-4px 0 12px;font-size:11.5px;color:var(--muted);line-height:1.5}
+
+/* gauges */
+.gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));
+gap:12px 8px;justify-items:center}
+.gauge{text-align:center;color:var(--ink)}
+.gauge svg{display:block;margin:0 auto;max-width:100%;height:auto}
+.gauge .gv{font:700 17px/1 system-ui,sans-serif;fill:currentColor;
+font-variant-numeric:tabular-nums}
+.gauge .arc.ok{stroke:var(--ok)}
+.gauge .arc.info{stroke:var(--info)}
+.gauge .arc.violet{stroke:var(--violet)}
+.gauge .arc.warn{stroke:var(--warn)}
+.gauge .arc.bad{stroke:var(--bad)}
+.gauge .arc.muted{stroke:var(--grey)}
+.gauge .gl{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.35;
+max-width:13ch}
+
+/* proportion bar */
+.bar{display:flex;align-items:center;gap:9px;min-width:126px}
+.bar .track{flex:1 1 auto;height:7px;border-radius:999px;background:var(--greybg);
+overflow:hidden;min-width:52px}
+.bar .fill{height:100%;border-radius:999px}
+.bar .fill.ok{background:var(--ok)}
+.bar .fill.warn{background:var(--warn)}
+.bar .fill.bad{background:var(--bad)}
+.bar .fill.muted{background:var(--grey)}
+.bar .pv{font-size:12px;color:var(--muted);width:36px;text-align:right;flex:none}
+
+/* chart */
+.chart{width:100%;height:auto;color:var(--muted);display:block}
+.chart .ax{font:10px/1 system-ui,sans-serif;fill:currentColor;opacity:.85}
+.legend{display:flex;flex-wrap:wrap;gap:6px 15px;font-size:11.5px;
+color:var(--muted);margin-top:9px}
+.legend span{display:inline-flex;align-items:center}
+.legend i{width:8px;height:8px;border-radius:50%;display:inline-block;
+margin-right:6px;flex:none}
+
+/* alert feed */
+.feed{list-style:none;margin:0;padding:0}
+.feed li{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid var(--line)}
+.feed li:first-child{padding-top:2px}
+.feed li:last-child{border-bottom:none;padding-bottom:2px}
+.feed .fi{width:22px;height:22px;border-radius:50%;flex:none;display:grid;
+place-items:center;font-size:12px;font-weight:700;margin-top:1px}
+.feed .fi.bad{background:var(--badbg);color:var(--bad)}
+.feed .fi.warn{background:var(--warnbg);color:var(--warn)}
+.feed .ft{min-width:0}
+.feed b{display:block;font-size:13px;font-weight:600;line-height:1.4}
+.feed span{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+
+/* report builder */
+.reportsplit{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+form.builder{display:grid;gap:16px;grid-template-columns:1fr;margin:0}
+@media(min-width:620px){form.builder{grid-template-columns:1fr 1fr}
+form.builder .step:first-child{grid-row:span 2}}
+.builder .step h4{margin:0 0 9px;font-size:11px;font-weight:700;
+text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.builder .field{margin-bottom:9px}
+.builder .field input{width:100%;min-width:0}
+.builder .hint{margin:2px 0 0;font-size:11.5px;color:var(--muted);line-height:1.5}
+.choices{display:flex;flex-direction:column;gap:2px}
+.choices.row{flex-direction:row;flex-wrap:wrap;gap:4px 16px}
+.choice{display:flex;gap:9px;align-items:flex-start;padding:5px 6px;
+border-radius:7px;cursor:pointer;font-size:13px}
+.choice:hover{background:rgba(127,127,127,.07)}
+.choice input{min-width:0;width:14px;height:14px;margin:3px 0 0;flex:none;
+accent-color:var(--accent)}
+.choice input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.choice b{font-weight:600;display:block;line-height:1.35}
+.choice i{display:block;font-style:normal;font-size:11.5px;color:var(--muted);
+line-height:1.45;margin-top:1px}
+.builder-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center;
+margin-top:16px}
+.builder-actions button{background:var(--panel);color:var(--accent);
+border-color:var(--line)}
+.builder-actions button:hover{border-color:var(--accent);filter:none}
+.builder-actions button.primary{background:var(--accent);color:#fff;
+border-color:var(--accent)}
+.builder-actions button.primary:hover{filter:brightness(1.08)}
+pre.cmd{background:var(--bg);border:1px solid var(--line);border-radius:7px;
+padding:11px 13px;overflow-x:auto;margin:0 0 10px;color:var(--ink);
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+font-size:11.5px;line-height:1.6;white-space:pre}
 
 /* tables */
 .tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
@@ -306,7 +693,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);
 white-space:nowrap;vertical-align:middle}
 th{color:var(--muted);font-weight:650;text-transform:uppercase;font-size:10px;
-letter-spacing:.08em;background:rgba(127,127,127,.05);white-space:nowrap}
+letter-spacing:.08em;background:rgba(127,127,127,.05)}
 tbody tr:last-child td{border-bottom:none}
 tbody tr{transition:background .14s ease}
 tbody tr:hover td{background:rgba(127,127,127,.05)}
@@ -321,6 +708,11 @@ font-weight:700;letter-spacing:.03em}
 .badge.warn{background:var(--warnbg);color:var(--warn)}
 .badge.bad{background:var(--badbg);color:var(--bad)}
 .badge.muted{background:var(--greybg);color:var(--grey)}
+.statusdot{display:inline-block;width:7px;height:7px;border-radius:50%;
+margin-right:7px;vertical-align:1px;background:currentColor}
+.st{font-size:12.5px;font-weight:600}
+.st.ok{color:var(--ok)}.st.warn{color:var(--warn)}
+.st.bad{color:var(--bad)}.st.muted{color:var(--grey)}
 .chip{display:inline-block;font-size:9.5px;font-weight:700;padding:1px 6px;
 border-radius:4px;background:var(--greybg);color:var(--grey);vertical-align:1px}
 
@@ -335,17 +727,16 @@ input,select{font:inherit;font-size:13px;padding:6px 9px;border-radius:7px;
 border:1px solid var(--line);background:var(--bg);color:var(--ink);min-width:132px}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px}
 button{font:inherit;font-size:13px;font-weight:600;padding:7px 15px;border-radius:7px;
-border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer}
+border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer;
+transition:filter .16s ease}
 button:hover{filter:brightness(1.08)}
 button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-a{transition:color .14s ease}
 a.btn{display:inline-block;text-decoration:none;font-size:12.5px;font-weight:600;
 padding:7px 13px;border-radius:7px;border:1px solid var(--line);
 background:var(--panel);color:var(--accent);
 transition:background .16s ease,border-color .16s ease}
 a.btn:hover{border-color:var(--accent);background:var(--bg)}
 a.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-button{transition:filter .16s ease}
 a.btn.off{color:var(--muted);opacity:.5;pointer-events:none}
 
 /* pagination + misc */
@@ -353,11 +744,9 @@ a.btn.off{color:var(--muted);opacity:.5;pointer-events:none}
 color:var(--muted)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
 .small{font-size:12px}.muted{color:var(--muted)}
-.empty{color:var(--muted);font-style:italic;text-align:center;padding:20px}
+.empty{color:var(--muted);font-style:italic;text-align:center;padding:20px;
+font-size:12.5px;margin:0}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-padding:15px 17px;box-shadow:var(--shadow)}
-.panel h3{margin:0 0 9px;font-size:13px;font-weight:650}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px}
 .kv dt{color:var(--muted)}.kv dd{margin:0}
 .stages{list-style:none;margin:0;padding:0;font-size:12.5px}
@@ -365,15 +754,30 @@ padding:15px 17px;box-shadow:var(--shadow)}
 .stages li:last-child{border-bottom:none}
 .stages b{display:block;font-size:11px;text-transform:uppercase;
 letter-spacing:.06em;color:var(--muted)}
-footer{color:var(--muted);font-size:11.5px;margin-top:32px;border-top:1px solid var(--line);
-padding-top:14px;line-height:1.7;max-width:80ch}
-@media print{.rail{display:none}.topbar{position:static}
-body{background:#fff}.tablewrap,.card,.panel{box-shadow:none}}
+footer.caveat{color:var(--muted);font-size:11.5px;margin-top:30px;
+border-top:1px solid var(--line);padding-top:14px;line-height:1.7;max-width:80ch}
+.appbar{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;
+justify-content:space-between;background:var(--panel);
+border-top:1px solid var(--line);padding:13px 26px;font-size:11.5px;
+color:var(--muted)}
+.appbar .l{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.appbar .l b{color:var(--ink);font-weight:650;letter-spacing:.05em}
+.appbar .sep{opacity:.4}
+.appbar .r{font-weight:600;color:var(--ink);opacity:.75}
+
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media print{.rail,.appbar{display:none}.topbar{position:static}
+body{background:#fff}.tablewrap,.card,.panel,.kpi{box-shadow:none}}
 @media(max-width:820px){.layout{flex-direction:column}
-.rail{width:auto;flex-direction:row;flex-wrap:wrap;padding:12px}
-.brand{border:none;margin:0;padding:0 12px 0 6px}
-.railfoot{display:none}.navlink{border-left:none;border-bottom:3px solid transparent}
-.navlink.active{border-left:none;border-bottom-color:var(--accent)}}
+.rail{width:auto;flex-direction:row;flex-wrap:wrap;padding:12px;
+align-items:center}
+.brand{border:none;margin:0;padding:0 14px 0 6px}
+.brand .wm b{font-size:19px}
+.railfoot{display:none}
+.navlink{border-left:none;border-bottom:3px solid transparent;padding:8px 12px}
+.navlink.active{border-left:none;border-bottom-color:#7fb0e0}
+.content{padding:20px 16px 32px}.topbar{padding:12px 16px}
+.appbar{padding:12px 16px}}
 """
 
 _DOC = """<!doctype html>
@@ -382,28 +786,39 @@ _DOC = """<!doctype html>
 <title>Argus &mdash; {title}</title>{meta_refresh}<style>{css}</style></head>
 <body><div class="layout">
 <nav class="rail">
-  <div class="brand">{eye}<b>Argus<br>DNS Monitor</b></div>
+  <div class="brand">{eye}<div class="wm"><b>ARGUS</b>
+    <span>National DNS Monitoring</span></div></div>
   {nav}
-  <div class="railfoot">Single vantage point.<br>Verdicts are evidence, not proof.</div>
+  <div class="railfoot">
+    <div class="quote">&ldquo;A safer internet for a stronger Sri Lanka&rdquo;</div>
+    <div class="caveat">Single vantage point.<br>Verdicts are evidence, not proof.</div>
+  </div>
 </nav>
 <div class="main">
   <div class="topbar">
-    <h1>Argus &mdash; DNS Caching-Server Health &amp; Cache-Poisoning Monitor</h1>
-    <div class="tagline">Independently verifying public caching DNS resolvers
-      against the authoritative DNS hierarchy</div>
-    <div class="meta">vantage <b>{vantage}</b>{scope} &middot; generated {generated}</div>
+    <div>
+      <div class="tagline">Watching today for a safer tomorrow</div>
+      <div class="pillars">Monitor &nbsp;&middot;&nbsp; Detect &nbsp;&middot;&nbsp; Protect</div>
+    </div>
+    <div class="stamp">{clock}<div><b>{generated}</b>
+      vantage {vantage} ({zone}){scope}</div></div>
   </div>
   <div class="content">
-    <h1 class="ptitle">{title}</h1>
-    <p class="pblurb">{blurb}</p>
+    {pagehead}
     {body}
-    <footer>
+    <footer class="caveat">
       Status labels are derived from stored raw metrics, not an opaque score.
       &ldquo;Possible cache poisoning&rdquo; means a resolver persistently served data that
       no authoritative source and no independent resolver corroborates. It is
       <em>not</em> proven poisoning: from a single vantage point a forged record and
       legitimate CDN or geographic variance can look identical.
     </footer>
+  </div>
+  <div class="appbar">
+    <div class="l"><b>ARGUS</b><span class="sep">|</span>
+      <span>DNS caching-server health &amp; cache-poisoning monitor</span>
+      <span class="sep">|</span><span>Sri Lanka</span></div>
+    <div class="r">Monitor the DNS. Secure the future.</div>
   </div>
 </div>
 </div></body></html>"""

@@ -42,6 +42,33 @@ python -m argus serve         # continuous monitoring on the configured interval
 - `dashboard` serves `http://127.0.0.1:8080`, re-reading the database on every
   request so it always shows live data (`--host`, `--port`, `--refresh`).
 
+## Reports (PDF and CSV)
+
+The Reports page of the live dashboard has a four-step generator: pick a report
+type, a period, a format and the optional sections, then **Generate & download**.
+Each file is also kept under `reports/`, and listed there under *Saved reports*.
+
+The same reports come from the command line:
+
+```powershell
+python -m argus export --type summary --format pdf            # everything on record
+python -m argus export --type health  --format csv --days 7   # the last week
+python -m argus export --type alerts  --since 2026-09-01 --until 2026-09-30
+python -m argus export --type domains --out C:\reports\domains.pdf
+```
+
+| Type | Contents |
+| --- | --- |
+| `summary` | Totals, agreement per resolver, result distribution, confirmed events. |
+| `health` | Availability, latency, correctness, freshness and DNSSEC per resolver. |
+| `domains` | Per-domain checks, agreement rate, flags and response time. |
+| `alerts` | Confirmed possible-poisoning events and the cross-check answers. |
+| `dnssec` | Signedness, resolver posture and AD flags per domain. |
+| `anomalies` | Every difference under review, with classification and state. |
+
+PDF generation is built in (`argus/pdfdoc.py`) &mdash; there is no extra
+dependency to install and nothing to configure.
+
 ## Database
 
 ```powershell

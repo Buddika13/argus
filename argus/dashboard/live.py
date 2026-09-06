@@ -16,6 +16,7 @@ import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .. import reporting
 from ..comparison import compare
 from ..models import MonitoredResolver
 from ..probe import ResolverProbe
@@ -28,6 +29,39 @@ from .shell import PAGES, page
 log = logging.getLogger("argus.dashboard")
 
 _ROUTES = {p[2]: p[0] for p in PAGES}          # "/resolvers" -> "resolvers"
+
+# Routes that return a file instead of a page.
+DOWNLOAD_PATH = "/reports/download"
+FILE_PATH = "/reports/file"
+
+
+def _params(query: str) -> dict:
+    """Query parameters, one value each, plus every repeated `options` value.
+
+    Checkboxes submit the same name once per ticked box, so the multi-valued
+    list is kept alongside the collapsed single values the pages expect.
+    """
+    parsed = parse_qs(query, keep_blank_values=True)
+    params = {k: v[0] for k, v in parsed.items()}
+    params["options_list"] = parsed.get("options", [])
+    return params
+
+
+def build_report(storage, params: dict, vantage: str):
+    """Build the report the Reports form is asking for, and its format."""
+    kind = (params.get("kind") or "summary").strip()
+    if kind not in reporting.REPORT_TITLES:
+        raise ValueError("Unknown report type: %s" % kind)
+    fmt = (params.get("format") or "pdf").strip().lower()
+    if fmt not in reporting.FORMATS:
+        raise ValueError("Unknown format: %s" % fmt)
+    report = reporting.build(
+        storage, kind,
+        since=reporting.parse_day(params.get("since", "")),
+        until=reporting.parse_day(params.get("until", ""), end_of_day=True),
+        vantage=vantage,
+        options=reporting.resolve_options(params.get("options_list") or []))
+    return report, fmt
 
 
 def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
@@ -145,13 +179,19 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
                                    "completed: %s" % exc}
         body = pages.verification(storage, live, params, result)
     elif key == "reports":
-        body = pages.reports(storage, live, (params.get("kind") or "").strip())
+        body = pages.reports(storage, live, params)
     else:
         raise KeyError(key)
     # Auto-refresh would discard a submitted verification, so it is not applied there.
     refresh = 0 if key == "verification" else refresh_seconds
+    # The confirmed-event count rides on the navigation, so it is visible from
+    # every page rather than only from the Overview.
+    try:
+        alerts = storage.table_counts().get("alerts", 0)
+    except Exception:                                  # noqa: BLE001
+        alerts = 0
     return page(key, vantage, body, live=live, refresh_seconds=refresh,
-                scope=_scope())
+                scope=_scope(), alerts=alerts, head=pages.head(key, live))
 
 
 def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
@@ -159,8 +199,59 @@ def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
     """An HTTPServer that re-renders the requested page from the database."""
 
     class Handler(BaseHTTPRequestHandler):
+        def _send_file(self, data: bytes, filename: str, mime: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s"' % filename)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _download(self, params: dict) -> None:
+            """Generate a report, keep a copy, and hand it to the browser."""
+            storage = Storage(db_path)
+            try:
+                report, fmt = build_report(storage, params, vantage)
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+                return
+            except Exception:                           # noqa: BLE001
+                log.exception("report generation failed")
+                self.send_error(500, "The report could not be generated")
+                return
+            finally:
+                storage.close()
+            try:
+                # Saved as well as sent, so it appears under Saved reports and
+                # can be fetched again without rebuilding it.
+                saved = reporting.save(report, fmt)
+                data = saved.read_bytes()
+                name = saved.name
+            except OSError:
+                # A read-only checkout must still be able to download.
+                log.warning("could not write to the reports directory", exc_info=True)
+                data = reporting.render(report, fmt)
+                name = report.basename(fmt)
+            self._send_file(data, name, reporting.MIME[fmt])
+
+        def _saved_file(self, params: dict) -> None:
+            path = reporting.saved_path(params.get("name", ""))
+            if path is None:
+                self.send_error(404, "No such report")
+                return
+            fmt = path.suffix.lstrip(".")
+            self._send_file(path.read_bytes(), path.name,
+                            reporting.MIME.get(fmt, "application/octet-stream"))
+
         def do_GET(self):                                   # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == DOWNLOAD_PATH:
+                self._download(_params(parsed.query))
+                return
+            if parsed.path == FILE_PATH:
+                self._saved_file(_params(parsed.query))
+                return
             key = _ROUTES.get(parsed.path or "/")
             if key is None and parsed.path in ("/index.html", ""):
                 key = "overview"
@@ -168,7 +259,7 @@ def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
                 self.send_error(404, "No such page")
                 return
 
-            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            params = _params(parsed.query)
             storage = Storage(db_path)
             try:
                 body = render_page(storage, key, vantage, params,

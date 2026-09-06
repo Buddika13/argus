@@ -92,7 +92,47 @@ Edit the files in `config/`:
 - `config/watchlist.txt` — the domains to monitor.
 - `config/config.yaml` — sweep interval, timeouts, DNSSEC toggle, database path.
 
-## 7. Tests and evaluation
+## 7. Reports (PDF and CSV)
+
+The Reports page of the live dashboard generates a report and hands the browser
+a file. Pick a report type, a period, a format and the optional sections, then
+**Generate & download**. Every generated file is also kept under `reports/` and
+listed on the page under *Saved reports*.
+
+The same from the shell:
+
+```bash
+make report-pdf                     # summary report, everything on record
+make report-all                     # one PDF per report type
+make export T=health F=csv D=7      # type / format / last N days
+
+python -m argus export --type domains --format pdf --days 30 --no-open
+python -m argus export --type alerts --since 2026-09-01 --until 2026-09-30
+```
+
+Report types: `summary`, `health`, `domains`, `alerts`, `dnssec`, `anomalies`.
+
+PDF writing is built in (`argus/pdfdoc.py`) with no extra package to install --
+no reportlab, no LaTeX, no headless browser. `apt` needs nothing beyond the
+Python already installed for the rest of Argus.
+
+### Reports on a schedule
+
+Argus has no report scheduler of its own; `cron` already does this well. A
+weekly summary every Monday at 06:00. A crontab entry must be a single line --
+cron does not accept backslash continuations:
+
+```bash
+crontab -e
+```
+
+```cron
+0 6 * * 1 cd /opt/argus && .venv/bin/python -m argus export --type summary --format pdf --days 7 --no-open
+```
+
+The file lands in `/opt/argus/reports/` and appears on the Reports page.
+
+## 8. Tests and evaluation
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"   # or: make test
