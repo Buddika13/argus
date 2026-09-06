@@ -51,6 +51,11 @@ WHITE = (1.0, 1.0, 1.0)
 TONES = {"ok": OK, "warn": WARN, "bad": BAD, "info": ACCENT, "muted": MUTED,
          "ink": INK}
 
+# Series colours for multi-line charts, in the order they are assigned.
+SERIES_INK = ((0.184, 0.498, 0.831), (0.122, 0.616, 0.384),
+              (0.816, 0.514, 0.086), (0.800, 0.294, 0.235),
+              (0.510, 0.341, 0.831), (0.055, 0.604, 0.655))
+
 # Adobe base-14 character widths, in 1/1000 em, for codes 32-126. Everything
 # outside that range falls back to the average width, which is close enough for
 # the occasional accented character in a domain name.
@@ -399,6 +404,101 @@ class PdfDocument:
         if total_label:
             self._text(MARGIN_X, self.y + 8, total_label, 8.0, True, INK)
             self.y += 14
+
+    def linechart(self, series, height: float = 110.0, unit: str = "") -> None:
+        """A multi-series time chart: [{"name", "colour", "points": [(x, y)]}].
+
+        `colour` is an index into SERIES_INK so a caller does not have to know
+        PDF colour tuples. One scale places every mark and every gridline names
+        a real value, as on screen.
+        """
+        points = [p for s in series for p in s.get("points") or []]
+        if len(points) < 2:
+            self.paragraph("Not enough history to chart.", 8.5)
+            return
+        self.ensure(height + 46)
+
+        xs = [p[0] for p in points]
+        x0, x1 = min(xs), max(xs)
+        if x1 <= x0:
+            x1 = x0 + 1
+        values = sorted(p[1] for p in points)
+        # As on the dashboard: scale to the 95th percentile so one timeout does
+        # not flatten every ordinary line onto the axis.
+        top = values[max(0, int(round(0.95 * (len(values) - 1))))] or values[-1] or 1.0
+        ymax = float(top) * 1.05 or 1.0
+
+        pad_l = 34.0
+        plot_w = CONTENT_W - pad_l - 6
+        top_y = self.y
+        base = top_y + height
+
+        def sx(x):
+            return MARGIN_X + pad_l + (x - x0) / (x1 - x0) * plot_w
+
+        def sy(y):
+            return base - min(1.0, y / ymax) * (height - 6)
+
+        for i in range(5):
+            value = ymax * i / 4
+            gy = sy(value)
+            self._line(MARGIN_X + pad_l, gy, PAGE_W - MARGIN_X, gy, RULE,
+                       0.7 if i == 0 else 0.3)
+            self._text_right(MARGIN_X + pad_l - 5, gy + 2.5,
+                             "%g" % round(value), 6.5, False, MUTED)
+
+        span_hours = (x1 - x0) / 3600.0
+        fmt = "%H:%M" if span_hours <= 36 else "%m-%d"
+        for i in range(4):
+            at = x0 + (x1 - x0) * i / 3
+            label = time.strftime(fmt, time.localtime(at))
+            x = sx(at) - width_of(label, 6.5) / 2
+            x = min(max(x, MARGIN_X), PAGE_W - MARGIN_X - width_of(label, 6.5))
+            self._text(x, base + 10, label, 6.5, False, MUTED)
+
+        for index, entry in enumerate(series):
+            pts = sorted(entry.get("points") or [])
+            if len(pts) < 2:
+                continue
+            colour = SERIES_INK[index % len(SERIES_INK)]
+            self._stroke(colour)
+            self._op("1.1 w 1 J 1 j")
+            path = ["%.2f %.2f m" % (sx(pts[0][0]), PAGE_H - sy(pts[0][1]))]
+            for x, y in pts[1:]:
+                path.append("%.2f %.2f l" % (sx(x), PAGE_H - sy(y)))
+            self._op(" ".join(path) + " S")
+
+        self.y = base + 16
+        x = MARGIN_X
+        for index, entry in enumerate(series):
+            if not entry.get("points"):
+                continue
+            label = str(entry.get("name", ""))
+            w = width_of(label, 7.0) + 20
+            if x + w > PAGE_W - MARGIN_X:
+                x = MARGIN_X
+                self.y += 11
+                self.ensure(11)
+            self._rect(x, self.y + 1, 6, 6, SERIES_INK[index % len(SERIES_INK)])
+            self._text(x + 10, self.y + 7, label, 7.0, False, MUTED)
+            x += w
+        self.y += 16
+        if unit:
+            self._text(MARGIN_X, self.y + 7, unit, 7.0, False, MUTED)
+            self.y += 12
+
+    def bullets(self, items) -> None:
+        """Findings as a marked list: (text, tone)."""
+        for text, tone in items:
+            colour = TONES.get(tone, MUTED)
+            lines = wrap(str(text), 9.0, CONTENT_W - 16)
+            self.ensure(len(lines) * 12.5 + 4)
+            self._rect(MARGIN_X + 1, self.y + 3, 5, 5, colour)
+            for i, line in enumerate(lines):
+                self._text(MARGIN_X + 14, self.y + 9, line, 9.0, False, INK)
+                self.y += 12.5
+            self.y += 2
+        self.y += 6
 
     # -- serialisation ----------------------------------------------------
 

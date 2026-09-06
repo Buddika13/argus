@@ -13,6 +13,7 @@ No Docker, no external services — just local files.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,8 @@ class Settings:
     raw: dict[str, Any]
     resolvers: list[MonitoredResolver] = field(default_factory=list)
     watchlist: list[str] = field(default_factory=list)
+    # domain -> the watch-list section it was listed under.
+    categories: dict[str, str] = field(default_factory=dict)
 
     @property
     def vantage(self) -> str:
@@ -111,10 +114,12 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         raw = _deep_merge(DEFAULTS, loaded)
 
+    watchlist = load_watchlist_with_categories(cfg / "watchlist.txt")
     return Settings(
         raw=raw,
         resolvers=load_resolvers(cfg / "resolvers.yaml"),
-        watchlist=load_watchlist(cfg / "watchlist.txt"),
+        watchlist=[name for name, _category in watchlist],
+        categories={name: category for name, category in watchlist if category},
     )
 
 
@@ -136,14 +141,41 @@ def load_resolvers(path: Path) -> list[MonitoredResolver]:
     return out
 
 
-def load_watchlist(path: Path) -> list[str]:
+# "# --- Sri Lanka: banking and financial ----" -> "Banking and financial"
+_SECTION = re.compile(r"^#\s*-{2,}\s*(.+?)\s*-{2,}\s*$")
+
+
+def _category_of(header: str) -> str:
+    """Turn a watch-list section header into a category label."""
+    label = header.split(":", 1)[-1].strip() if ":" in header else header.strip()
+    return label[:1].upper() + label[1:] if label else ""
+
+
+def load_watchlist_with_categories(path: Path) -> list[tuple[str, str]]:
+    """The watch-list as (domain, category) pairs.
+
+    The file already groups domains under commented section headers -- banking,
+    government, utilities, telecommunications, education, TLD breadth -- so the
+    category is read from the file the operator already maintains rather than
+    stored separately and left to drift.
+    """
     if not path.exists():
         return []
     seen: set[str] = set()
-    domains: list[str] = []
+    out: list[tuple[str, str]] = []
+    category = ""
     for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        header = _SECTION.match(stripped)
+        if header:
+            category = _category_of(header.group(1))
+            continue
         entry = line.split("#", 1)[0].strip().lower()
         if entry and entry not in seen:
             seen.add(entry)
-            domains.append(entry)
-    return domains
+            out.append((entry, category))
+    return out
+
+
+def load_watchlist(path: Path) -> list[str]:
+    return [name for name, _category in load_watchlist_with_categories(path)]

@@ -56,8 +56,10 @@ class DashboardTests(unittest.TestCase):
             "queries": ("DNS Query Monitor", "Classification"),
             "anomalies": ("Anomaly Investigation", "Legitimate explanations tested"),
             "verification": ("Independent Verification", "Monitored resolver"),
+            # Section names follow the supplied six-page report UI.
             "reports": ("Summary report", "Resolver health report",
-                        "Alerts report", "Generate a report", "Saved reports"),
+                        "Alerts report", "1. Select report type",
+                        "Recent reports"),
         }
         for key, fragments in expected.items():
             page = self._page(db, key)

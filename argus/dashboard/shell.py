@@ -214,6 +214,69 @@ def gauge(value, label: str, tone: str = "ok") -> str:
     )
 
 
+def donut(segments, size: float = 148.0) -> str:
+    """A ring divided into proportions: (label, value, tone), plus a legend.
+
+    Segments are laid out by accumulating dash offsets around one circle, so the
+    arcs always close exactly and a rounding error cannot leave a visible gap.
+    """
+    segments = [(str(label), float(value), tone)
+                for label, value, tone in segments if value]
+    total = sum(value for _l, value, _t in segments)
+    if not total:
+        return "<p class='empty'>Nothing recorded for this period.</p>"
+
+    radius = size / 2 - 13
+    circumference = 2 * math.pi * radius
+    centre = size / 2
+    arcs, offset = "", 0.0
+    for _label, value, tone in segments:
+        length = value / total * circumference
+        arcs += ('<circle cx="%(c).1f" cy="%(c).1f" r="%(r).1f" fill="none" '
+                 'class="arc %(tone)s" stroke-width="20" '
+                 'stroke-dasharray="%(on).2f %(off).2f" '
+                 'stroke-dashoffset="%(shift).2f" '
+                 'transform="rotate(-90 %(c).1f %(c).1f)"/>'
+                 % {"c": centre, "r": radius, "tone": tone, "on": length,
+                    "off": circumference - length, "shift": -offset})
+        offset += length
+
+    legend = ""
+    for label, value, tone in segments:
+        legend += ("<li><span class='swatch " + tone + "'></span>"
+                   "<b>" + e(label) + "</b>"
+                   "<span class='n'>" + "{:,}".format(int(value)) + "</span>"
+                   "<span class='p'>%.1f%%</span></li>" % (value / total * 100))
+
+    return ("<div class='donutwrap'><div class='donut'>"
+            '<svg viewBox="0 0 %(s).0f %(s).0f" width="%(s).0f" height="%(s).0f" '
+            'role="img" aria-label="Result distribution">%(arcs)s'
+            '<text x="%(c).1f" y="%(cy).1f" class="dv" text-anchor="middle">%(t)s</text>'
+            '<text x="%(c).1f" y="%(cl).1f" class="dl" text-anchor="middle">'
+            "total</text></svg></div>"
+            "<ul class='donutlegend'>%(legend)s</ul></div>"
+            % {"s": size, "c": centre, "cy": centre - 2, "cl": centre + 14,
+               "arcs": arcs, "t": "{:,}".format(int(total)), "legend": legend})
+
+
+def scorecard(name: str, value, status: str, tone: str) -> str:
+    """One resolver's headline metric, its name and its status."""
+    shown = ("%.0f%%" % value) if isinstance(value, (int, float)) else "&mdash;"
+    return ("<div class='score " + tone + "'><b class='nm'>" + e(name) + "</b>"
+            "<span class='v'>" + shown + "</span>"
+            "<span class='st " + tone + "'><span class='statusdot'></span>"
+            + e(status) + "</span></div>")
+
+
+def findings(items) -> str:
+    """A marked list of statements: (text, tone)."""
+    out = "<ul class='findings'>"
+    for text, tone in items:
+        out += ("<li><span class='fmark " + tone + "'></span>"
+                "<span>" + e(text) + "</span></li>")
+    return out + "</ul>"
+
+
 # Series colours for the performance chart. Fixed hexes rather than theme
 # tokens: an SVG stroke cannot resolve a variable that only exists per theme,
 # and these six read against both the light and the dark panel.
@@ -358,6 +421,61 @@ KPI_ICONS = {
     "uptime": _icon('<circle cx="12" cy="12" r="9"/><path d="M12 6.5V12l3.5 2"/>', 22),
 }
 
+# -- inlined assets --------------------------------------------------------
+#
+# From the supplied UI package (assets/argus-logo.svg, empty-state.svg,
+# sri-lanka.svg), inlined rather than linked: every Argus page must remain a
+# single self-contained file that opens from the filesystem, so an <img src>
+# to a sibling asset would break the static export and the printed PDF.
+
+ASSET_LOGO = (
+    '<svg class="logomark" viewBox="0 0 360 100" role="img" '
+    'aria-label="Argus, National DNS Monitoring">'
+    '<rect width="360" height="100" rx="18" fill="#10243b"/>'
+    '<path d="M22 50 C55 12 105 12 138 50 C105 88 55 88 22 50Z" fill="none" '
+    'stroke="#1687ff" stroke-width="9"/>'
+    '<circle cx="80" cy="50" r="17" fill="#1687ff"/>'
+    '<circle cx="80" cy="50" r="8" fill="#10243b"/>'
+    '<text x="155" y="57" font-family="Arial, Helvetica, sans-serif" '
+    'font-size="39" font-weight="700" fill="#ffffff">ARGUS</text>'
+    '<text x="158" y="78" font-family="Arial, Helvetica, sans-serif" '
+    'font-size="11" fill="#c9d7e7">National DNS Monitoring</text></svg>')
+
+# A stylised island, not a survey-accurate coastline -- it is decoration in the
+# sidebar, and the supplied asset is kept as the designer drew it.
+ASSET_LANKA = (
+    '<svg class="lanka" viewBox="0 0 180 300" role="img" '
+    'aria-label="Stylised map of Sri Lanka">'
+    '<path d="M87 8 C111 21 132 43 137 68 C142 91 129 110 137 134 C145 159 137 '
+    '181 151 205 C159 220 154 239 143 253 C130 270 116 287 93 292 C70 297 55 '
+    '281 48 263 C42 248 27 238 27 220 C27 203 39 192 38 174 C37 153 24 138 29 '
+    '118 C34 99 48 91 48 71 C48 51 58 31 70 17 C75 11 80 7 87 8Z" '
+    'fill="#0b67ad" opacity=".42"/>'
+    '<circle cx="91" cy="112" r="4" fill="#1687ff"/>'
+    '<circle cx="73" cy="180" r="4" fill="#1687ff"/>'
+    '<circle cx="115" cy="225" r="4" fill="#1687ff"/></svg>')
+
+ASSET_EMPTY = (
+    '<svg class="emptymark" viewBox="0 0 72 72" width="60" height="60" '
+    'aria-hidden="true">'
+    '<rect x="3" y="3" width="66" height="66" rx="16" fill="currentColor" '
+    'opacity=".12"/>'
+    '<path d="M20 36h32M36 20v32" stroke="currentColor" stroke-width="6" '
+    'stroke-linecap="round"/></svg>')
+
+
+def empty_state(title: str, text: str = "", action: str = "") -> str:
+    """The no-data panel.
+
+    Shown wherever the database has nothing to report, so a page is never
+    padded with zeroes that could be mistaken for a measurement.
+    """
+    return ("<div class='emptystate'>" + ASSET_EMPTY
+            + "<b>" + e(title) + "</b>"
+            + ("<span>" + e(text) + "</span>" if text else "")
+            + (action or "") + "</div>")
+
+
 EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
        'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" '
        'aria-hidden="true">'
@@ -406,6 +524,7 @@ def page(active: str, vantage: str, body: str, live: bool = False,
                     if refresh_seconds and refresh_seconds > 0 else "")
     return _DOC.format(
         css=_CSS, meta_refresh=meta_refresh, eye=EYE, clock=ICON_CLOCK,
+        lanka=ASSET_LANKA,
         nav=_nav(active, live, alerts), title=e(title),
         pagehead=head or pagehead(e(title), e(blurb)),
         vantage=e(vantage), scope=(" &middot; " + e(scope)) if scope else "",
@@ -765,6 +884,146 @@ color:var(--muted)}
 .appbar .sep{opacity:.4}
 .appbar .r{font-weight:600;color:var(--ink);opacity:.75}
 
+/* sidebar map */
+.lanka{display:block;width:104px;height:auto;margin:0 auto 12px;opacity:.85}
+
+/* empty states */
+.emptystate{display:flex;flex-direction:column;align-items:center;
+justify-content:center;text-align:center;gap:7px;padding:34px 20px;
+color:var(--muted)}
+.emptystate .emptymark{color:var(--accent);flex:none}
+.emptystate b{font-size:14px;color:var(--ink);font-weight:650;margin-top:4px}
+.emptystate span{font-size:12.5px;max-width:46ch;line-height:1.55}
+.emptystate .btn,.emptystate code{margin-top:6px}
+.panel .emptystate{padding:26px 12px}
+
+/* report sub-navigation */
+.tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);
+margin:0 0 18px}
+.tabs a{padding:9px 14px;font-size:13px;font-weight:600;text-decoration:none;
+color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;
+transition:color .16s ease,border-color .16s ease}
+.tabs a:hover{color:var(--ink)}
+.tabs a.on{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* report builder */
+.builder{display:block;background:var(--panel);border:1px solid var(--line);
+border-radius:10px;padding:0;margin-bottom:18px;box-shadow:var(--shadow)}
+.builder .steps{display:grid;
+grid-template-columns:repeat(auto-fit,minmax(226px,1fr));gap:0}
+.builder .step{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
+.builder .step:last-child{border-right:none}
+.builder h4{margin:0 0 10px;font-size:12px;font-weight:700;color:var(--ink);
+letter-spacing:.01em}
+.builder h4.next{margin-top:16px}
+.choices{display:flex;flex-direction:column;gap:6px}
+.choices.row{flex-direction:row;flex-wrap:wrap;gap:8px 14px}
+.choice{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;
+cursor:pointer;line-height:1.4}
+.choice input{min-width:0;margin:2px 0 0;accent-color:var(--accent);flex:none}
+.choice b{font-weight:600;display:block;color:var(--ink)}
+.choice i{font-style:normal;display:block;color:var(--muted);font-size:11px;
+margin-top:1px}
+.builder .hint{font-size:11px;color:var(--muted);margin:8px 0 0}
+.builder-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+.builder .field{margin-bottom:8px}
+button.primary{background:var(--accent);border-color:var(--accent)}
+
+/* filter bar */
+.filterbar{display:flex;flex-wrap:wrap;gap:9px;align-items:flex-end;
+margin-bottom:14px}
+.filterbar .grow{flex:1 1 190px;min-width:150px}
+.filterbar .grow input{width:100%}
+
+/* the printable report sheet */
+.paper{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+box-shadow:var(--shadow);padding:26px 28px 30px;max-width:900px}
+.paper-head{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;
+justify-content:space-between;border-bottom:2px solid var(--accent);
+padding-bottom:14px;margin-bottom:18px}
+.paper .logomark{width:196px;height:auto;flex:none}
+.paper-meta{text-align:right;font-size:11.5px;color:var(--muted);line-height:1.7}
+.paper-meta b{display:block;font-size:13.5px;color:var(--ink)}
+.paper h2{font-size:17px;font-weight:650;margin:22px 0 4px;letter-spacing:-.01em;
+text-transform:none;color:var(--ink)}
+.paper h2:first-of-type{margin-top:0}
+.paper h3{font-size:13px;font-weight:650;margin:18px 0 8px}
+.paper .sub{font-size:11.5px;color:var(--muted);margin:0 0 10px;line-height:1.5}
+
+/* evidence: the two resolution paths, side by side */
+.paths{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+gap:12px;margin-bottom:12px}
+.pathbox{border:1px solid var(--line);border-radius:9px;padding:12px 14px;
+background:var(--bg)}
+.pathbox.untrusted{border-left:3px solid var(--bad)}
+.pathbox.trusted{border-left:3px solid var(--ok)}
+.pathbox h4{margin:0 0 3px;font-size:11px;text-transform:uppercase;
+letter-spacing:.07em;color:var(--muted);font-weight:700}
+.pathbox .cmd{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,
+Consolas,monospace;font-size:11.5px;color:var(--ink);margin:6px 0;
+word-break:break-all}
+.pathbox .ans{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+font-size:12px;color:var(--ink);line-height:1.7}
+.pathbox .ans .extra{color:var(--bad);font-weight:600}
+.verdictline{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+padding:11px 14px;border-radius:9px;background:var(--bg);
+border:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+.verdictline b{font-size:13px}
+
+/* findings list */
+.findings{list-style:none;margin:0;padding:0}
+.findings li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;
+font-size:13px;line-height:1.55;border-bottom:1px solid var(--line)}
+.findings li:last-child{border-bottom:none}
+.fmark{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
+.fmark.ok{background:var(--ok)}.fmark.warn{background:var(--warn)}
+.fmark.bad{background:var(--bad)}.fmark.info{background:var(--accent)}
+.fmark.muted{background:var(--grey)}
+
+/* per-resolver score cards */
+.scores{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+gap:12px;margin-bottom:14px}
+.score{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:13px 15px;box-shadow:var(--shadow);border-top:3px solid var(--grey)}
+.score.ok{border-top-color:var(--ok)}
+.score.warn{border-top-color:var(--warn)}
+.score.bad{border-top-color:var(--bad)}
+.score .nm{display:block;font-size:13px;font-weight:650}
+.score .v{display:block;font-size:25px;font-weight:700;letter-spacing:-.03em;
+margin:4px 0 3px;font-variant-numeric:tabular-nums}
+.score.ok .v{color:var(--ok)}.score.warn .v{color:var(--warn)}
+.score.bad .v{color:var(--bad)}.score.muted .v{color:var(--muted)}
+.score .st{font-size:10.5px}
+
+/* donut */
+.donutwrap{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+.donut{flex:none;color:var(--ink)}
+.donut svg{display:block}
+.donut .arc.ok{stroke:var(--ok)}.donut .arc.warn{stroke:var(--warn)}
+.donut .arc.bad{stroke:var(--bad)}.donut .arc.info{stroke:var(--accent)}
+.donut .arc.muted{stroke:var(--grey)}
+.donut .dv{font:700 20px/1 system-ui,sans-serif;fill:currentColor;
+font-variant-numeric:tabular-nums}
+.donut .dl{font:400 9px/1 system-ui,sans-serif;fill:currentColor;opacity:.6;
+text-transform:uppercase;letter-spacing:.1em}
+.donutlegend{list-style:none;margin:0;padding:0;flex:1 1 190px;min-width:180px}
+.donutlegend li{display:flex;align-items:center;gap:8px;font-size:12.5px;
+padding:5px 0;border-bottom:1px solid var(--line)}
+.donutlegend li:last-child{border-bottom:none}
+.donutlegend b{font-weight:600;flex:1 1 auto}
+.donutlegend .n,.donutlegend .p{font-variant-numeric:tabular-nums;
+color:var(--muted);font-size:12px}
+.donutlegend .p{width:52px;text-align:right}
+.swatch{width:9px;height:9px;border-radius:2px;flex:none}
+.swatch.ok{background:var(--ok)}.swatch.warn{background:var(--warn)}
+.swatch.bad{background:var(--bad)}.swatch.info{background:var(--accent)}
+.swatch.muted{background:var(--grey)}
+
+pre.cmd{background:var(--bg);border:1px solid var(--line);border-radius:7px;
+padding:11px 13px;overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,
+Consolas,monospace;font-size:12px;color:var(--ink);margin:0 0 10px}
+
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 @media print{.rail,.appbar{display:none}.topbar{position:static}
 body{background:#fff}.tablewrap,.card,.panel,.kpi{box-shadow:none}}
@@ -790,6 +1049,7 @@ _DOC = """<!doctype html>
     <span>National DNS Monitoring</span></div></div>
   {nav}
   <div class="railfoot">
+    {lanka}
     <div class="quote">&ldquo;A safer internet for a stronger Sri Lanka&rdquo;</div>
     <div class="caveat">Single vantage point.<br>Verdicts are evidence, not proof.</div>
   </div>

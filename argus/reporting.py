@@ -212,21 +212,37 @@ def _summary(storage, report, flags) -> None:
     ]))
 
     resolver_rows = storage.rollup("resolver", **window)
-    if flags["charts"] and resolver_rows:
-        bars = [(r["key"], _pct(r["matched"], r["checks"]),
-                 "ok" if _pct(r["matched"], r["checks"]) >= 99 else "warn")
-                for r in sorted(resolver_rows, key=lambda r: r["key"])[:8]]
-        report.sections.append(Section(
-            "bars", "Agreement with the authoritative hierarchy", bars,
-            note="Share of this resolver's answers that the authoritative walk "
-                 "corroborated, per resolver."))
+    if flags["charts"]:
+        series = _trend_series(storage)
+        if series:
+            report.sections.append(Section(
+                "trend", "DNS query trend", series,
+                note="Average response time per resolver, one point per "
+                     "recorded sweep."))
+
+        if resolver_rows:
+            report.sections.append(Section(
+                "bars", "Agreement with the authoritative hierarchy",
+                [(r["key"], _pct(r["matched"], r["checks"]),
+                  "ok" if _pct(r["matched"], r["checks"]) >= 99 else "warn")
+                 for r in sorted(resolver_rows, key=lambda r: r["key"])[:8]],
+                note="Share of this resolver's answers that the authoritative "
+                     "walk corroborated."))
 
         report.sections.append(Section(
-            "stack", "Result distribution",
+            "donut", "Result distribution",
             [(verdict.short_of(r["classification"]), r["n"],
               _tone_for(r["classification"])) for r in counts],
             note="%s measurements, by the classification stored for each."
                  % _num(total)))
+
+    report.sections.append(Section(
+        "table", "Top domains by checks", _top_domains(storage, window),
+        note="The most frequently checked names in this period."))
+
+    report.sections.append(Section(
+        "findings", "Key findings", _key_findings(storage, report, window),
+        note="Each line restates a measured value; none of them is advice."))
 
     report.sections.append(Section(
         "table", "Resolver totals",
@@ -260,6 +276,15 @@ def _health(storage, report, flags) -> None:
         ("Records compared", _num(storage.count_events(**window)), "info"),
     ]))
 
+    report.sections.append(Section(
+        "scorecards", "Correctness by resolver",
+        [(x["name"], (x["correctness"] * 100
+                      if isinstance(x["correctness"], (int, float)) else None),
+          x["status"], _status_tone(x["status"]))
+         for x in monitored],
+        note="Correctness is a stored metric, not a blended score: the share of "
+             "judgeable answers that agreed with the authoritative hierarchy."))
+
     if flags["charts"] and monitored:
         report.sections.append(Section(
             "bars", "Availability by resolver",
@@ -267,6 +292,40 @@ def _health(storage, report, flags) -> None:
               "ok" if (x["availability"] or 0) >= 100 else "warn")
              for x in monitored if x["availability"] is not None],
             note="Share of queries that received any answer at all."))
+
+        series = _trend_series(storage)
+        if series:
+            report.sections.append(Section(
+                "trend", "Average response time", series,
+                note="One point per resolver per recorded sweep."))
+
+    report.sections.append(Section(
+        "table", "Health dimension scores",
+        {"headers": ["Resolver", "Correctness", "Freshness", "Availability",
+                     "DNSSEC (AD)"],
+         "widths": [1.4, 1.0, 1.0, 1.0, 1.0],
+         "aligns": ["l", "r", "r", "r", "r"],
+         "rows": [[x["name"],
+                   _dimension(x["correctness"], scale=100),
+                   _dimension(x["freshness_rate"], scale=100),
+                   _dimension(x["availability"]),
+                   _dimension(x["ad_rate"], scale=100)]
+                  for x in monitored]},
+        note="Every column is one column of the health_metrics table."))
+
+    issues = []
+    for a in storage.anomalies_between(**window)[:25]:
+        issues.append([_stamp(a["observed_at"]), a["resolver"],
+                       "%s (%s)" % (a["domain"], a["rtype"]),
+                       (verdict.severity_of(a["classification"]) or "-",
+                        verdict.severity_tone(a["classification"])),
+                       a["verification_state"], a["reason"] or "-"])
+    report.sections.append(Section(
+        "table", "Resolver issues",
+        {"headers": ["Observed", "Resolver", "Domain", "Severity", "State",
+                     "Issue"],
+         "widths": [1.3, 1.0, 1.4, 0.8, 1.0, 3.2],
+         "aligns": ["l", "l", "l", "l", "l", "l"], "rows": issues}))
 
     report.sections.append(Section(
         "table", "Health metrics",
@@ -287,6 +346,15 @@ def _health(storage, report, flags) -> None:
 def _status_tone(status: str) -> str:
     from .dashboard.shell import status_tone
     return status_tone(status)
+
+
+def _dimension(value, scale: float = 1.0) -> tuple:
+    """One health dimension as a percentage with a tone, or a dash if unmeasured."""
+    if not isinstance(value, (int, float)):
+        return ("-", "muted")
+    percent = value * scale if scale != 1.0 else value
+    tone = "ok" if percent >= 99 else ("warn" if percent >= 90 else "bad")
+    return ("%.0f%%" % percent, tone)
 
 
 def _domains(storage, report, flags) -> None:
@@ -340,6 +408,41 @@ def _alerts(storage, report, flags, heading: str = "") -> None:
                        persistence.get("repetitions", "-")),
             evidence.get("decision") or "-",
         ])
+    if not heading:
+        # Severity counts, over confirmed events and everything still under
+        # review, so the tiles describe the whole workload rather than only the
+        # worst of it.
+        anomalies = storage.anomalies_between(**window)
+        by_severity = {"High": 0, "Medium": 0, "Low": 0}
+        for a in anomalies:
+            level = verdict.severity_of(a["classification"])
+            if level:
+                by_severity[level] += 1
+        report.sections.append(Section("tiles", "Alerts in this period", [
+            ("Total findings", str(len(anomalies)), "info"),
+            ("High severity", str(by_severity["High"]),
+             "bad" if by_severity["High"] else "ok"),
+            ("Medium severity", str(by_severity["Medium"]),
+             "warn" if by_severity["Medium"] else "ok"),
+            ("Low severity", str(by_severity["Low"]), "muted"),
+        ]))
+        report.sections.append(Section(
+            "table", "All findings by severity",
+            {"headers": ["Time", "Severity", "Domain", "Resolver",
+                         "Classification", "State"],
+             "widths": [1.3, 0.8, 1.5, 1.0, 1.8, 1.0],
+             "aligns": ["l", "l", "l", "l", "l", "l"],
+             "rows": [[_stamp(a["observed_at"]),
+                       (verdict.severity_of(a["classification"]) or "-",
+                        verdict.severity_tone(a["classification"])),
+                       "%s (%s)" % (a["domain"], a["rtype"]), a["resolver"],
+                       (a["classification"], _tone_for(a["classification"])),
+                       a["verification_state"]]
+                      for a in anomalies]},
+            note="Severity is a display ranking of the stored classification: "
+                 "possible poisoning is High, a persistent irregularity is "
+                 "Medium, a transient or unmeasurable one is Low."))
+
     report.sections.append(Section(
         "table", heading or "Confirmed possible-poisoning events",
         {"headers": ["Confirmed", "Resolver", "Domain", "Verdict",
@@ -435,6 +538,102 @@ def _anomalies(storage, report, flags) -> None:
                   for a in rows]}))
 
 
+def _trend_series(storage, limit: int = 24) -> list:
+    """Response time per resolver over the recorded sweeps.
+
+    Points come from health_metrics -- one per resolver per sweep -- so the
+    chart plots what was measured rather than an interpolation.
+    """
+    from .dashboard.pages import resolver_summaries
+    series = []
+    for row in resolver_summaries(storage):
+        if not row["enabled"]:
+            continue
+        history = storage.metric_history(row["name"], limit=limit)
+        points = [(h["computed_at"], h["avg_latency_ms"]) for h in history
+                  if h["computed_at"] and h["avg_latency_ms"] is not None]
+        if points:
+            series.append({"name": row["name"], "points": sorted(points)})
+    return series
+
+
+def _key_findings(storage, report, window) -> list:
+    """Plain statements of what the numbers say, each traceable to a metric.
+
+    Every line restates something measured. Nothing here is advice, a
+    prediction, or a judgement the detection engine did not already make.
+    """
+    counts, total, benign, poisoning, average = _headline(storage, report, window)
+    findings = []
+    if not total:
+        return [("No measurements were recorded in this period.", "muted")]
+
+    agreement = _pct(benign, total)
+    findings.append((
+        "Resolvers agreed with the authoritative hierarchy on %.1f%% of %s "
+        "checks." % (agreement, _num(total)),
+        "ok" if agreement >= 99 else ("warn" if agreement >= 95 else "bad")))
+
+    anomalies = storage.anomalies_between(**window)
+    if anomalies:
+        confirmed = sum(1 for a in anomalies
+                        if a["verification_state"] == "CONFIRMED")
+        findings.append((
+            "%d difference%s went to verification; %d %s confirmed as a "
+            "persistent irregularity." % (
+                len(anomalies), "" if len(anomalies) == 1 else "s", confirmed,
+                "was" if confirmed == 1 else "were"),
+            "warn" if confirmed else "ok"))
+    else:
+        findings.append(("No difference required investigation in this period.",
+                         "ok"))
+
+    if poisoning:
+        findings.append((
+            "%s answer%s carried the unpublished-address fingerprint of cache "
+            "poisoning. Possible, not proven." % (
+                _num(poisoning), "" if poisoning == 1 else "s"), "bad"))
+    else:
+        findings.append(("No answer carried the fingerprint of cache poisoning.",
+                         "ok"))
+
+    resolver_rows = storage.rollup("resolver", **window)
+    slow = [r for r in resolver_rows if (r["avg_latency"] or 0) > 0]
+    if slow:
+        worst = max(slow, key=lambda r: r["avg_latency"])
+        findings.append((
+            "%s was the slowest resolver at %s average response time; the "
+            "mean across resolvers was %s." % (
+                worst["key"], _num(worst["avg_latency"], " ms"),
+                _num(average, " ms")),
+            "warn" if worst["avg_latency"] > 1000 else "info"))
+
+    dnssec = storage.dnssec_rollup(**window)
+    if dnssec:
+        authenticated = sum(1 for r in dnssec if r["ad_flag"])
+        rate = _pct(authenticated, len(dnssec))
+        findings.append((
+            "The authenticated-data flag was set on %.1f%% of %d DNSSEC "
+            "observations." % (rate, len(dnssec)),
+            "ok" if rate >= 50 else "warn"))
+    return findings
+
+
+def _top_domains(storage, window, limit: int = 5) -> dict:
+    rows = storage.rollup("domain", **window)
+    busiest = sorted(rows, key=lambda r: -r["checks"])[:limit]
+    return {"headers": ["#", "Domain", "Checks", "Flagged", "Agreement",
+                        "Status"],
+            "widths": [0.3, 2.2, 0.8, 0.7, 0.9, 1.1],
+            "aligns": ["r", "l", "r", "r", "r", "l"],
+            "rows": [[str(i), r["key"], _num(r["checks"]), _num(r["flagged"]),
+                      "%.1f%%" % _pct(r["matched"], r["checks"]),
+                      ("Clean", "ok") if not r["flagged"]
+                      else (("Poisoning", "bad") if r["poisoning"]
+                            else ("Under review", "warn"))]
+                     for i, r in enumerate(busiest, start=1)]}
+
+
 def _evidence(raw):
     try:
         return json.loads(raw) if raw else {}
@@ -464,8 +663,18 @@ def to_pdf(report: Report) -> bytes:
             doc.tiles(section.payload)
         elif section.kind == "bars":
             doc.barchart(section.payload)
-        elif section.kind == "stack":
+        elif section.kind in ("stack", "donut"):
+            # A donut prints as a proportion bar: on paper a labelled bar is
+            # read more accurately than an arc, and it carries the same numbers.
             doc.stacked_bar(section.payload)
+        elif section.kind == "trend":
+            doc.linechart(section.payload, unit="Response time (ms)")
+        elif section.kind == "findings":
+            doc.bullets(section.payload)
+        elif section.kind == "scorecards":
+            doc.tiles([(name, ("%.0f%%" % value)
+                        if isinstance(value, (int, float)) else "-", tone)
+                       for name, value, _status, tone in section.payload])
         elif section.kind == "table":
             spec = section.payload
             doc.table(spec["headers"], spec["rows"], spec.get("widths"),
@@ -506,10 +715,26 @@ def to_csv(report: Report) -> bytes:
             out.writerow(["Measure", "Value"])
             for label, value, _tone in section.payload:
                 out.writerow([label, value])
-        elif section.kind in ("bars", "stack"):
+        elif section.kind in ("bars", "stack", "donut"):
             out.writerow(["Label", "Value"])
             for label, value, _tone in section.payload:
                 out.writerow([label, value])
+        elif section.kind == "trend":
+            out.writerow(["Resolver", "Time", "Response time (ms)"])
+            for entry in section.payload:
+                for stamp, value in entry["points"]:
+                    out.writerow([entry["name"], _stamp(stamp), round(value, 2)])
+        elif section.kind == "findings":
+            out.writerow(["Finding"])
+            for text, _tone in section.payload:
+                out.writerow([text])
+        elif section.kind == "scorecards":
+            out.writerow(["Resolver", "Correctness", "Status"])
+            for name, value, status, _tone in section.payload:
+                out.writerow([name,
+                              ("%.1f%%" % value)
+                              if isinstance(value, (int, float)) else "",
+                              status])
         elif section.kind == "table":
             spec = section.payload
             out.writerow(spec["headers"])

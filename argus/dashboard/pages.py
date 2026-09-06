@@ -14,7 +14,8 @@ import json
 
 from .. import reporting
 from . import verdict
-from .shell import (HEALTHY, ICON_PLAY, ICON_REPORT, KPI_ICONS, NO_DATA,
+from .shell import (ASSET_LOGO, HEALTHY, ICON_PLAY, ICON_REPORT, KPI_ICONS,
+                    NO_DATA, donut, empty_state, findings, scorecard,
                     SERIES_COLOURS, STATUS_SEVERITY, badge, bar, e, gauge, kpi,
                     linechart, link, ms, note, pagehead, pct, rate, records,
                     resolver_status, sparkline, status_tone, table, ts)
@@ -875,9 +876,36 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
 
 # -- 7. REPORTS -------------------------------------------------------------
 #
-# One report definition serves three outputs: the preview on this page, the PDF
-# and the CSV. They are rendered from the same `reporting.Report`, so a preview
-# can never show something the downloaded file does not contain.
+# Six views behind one navigation entry. Every figure on every one of them is
+# read from the database through `reporting`, which builds a report once and
+# renders it to HTML here, to PDF and to CSV for download -- so a preview can
+# never show something a downloaded file does not contain.
+#
+# Where the database has nothing, the view shows an empty state. It never pads
+# a page with zeroes, because a zero that was measured and a zero that was
+# never measured mean different things.
+
+REPORT_VIEWS = (
+    ("selection", "Reports"),
+    ("preview", "Report preview"),
+    ("summary", "Summary"),
+    ("resolver", "Resolver health"),
+    ("domain", "Domain analysis"),
+    ("alerts", "Alerts"),
+)
+
+
+def _view_link(live: bool, view: str, extra: str = "") -> str:
+    return link("reports", live, "?view=" + view + extra)
+
+
+def _tabs(live: bool, current: str) -> str:
+    out = "<div class='tabs'>"
+    for key, label in REPORT_VIEWS:
+        cls = " class='on'" if key == current else ""
+        out += "<a" + cls + " href='" + _view_link(live, key) + "'>" + e(label) + "</a>"
+    return out + "</div>"
+
 
 def _radio(name: str, value: str, label: str, current: str,
            description: str = "") -> str:
@@ -894,28 +922,56 @@ def _checkbox(name: str, value: str, label: str, checked: bool) -> str:
             + "><span><b>" + e(label) + "</b></span></label>")
 
 
+def _has_data(storage) -> bool:
+    return (storage.table_counts().get("query_results", 0) or 0) > 0
+
+
+def _no_data_state(live: bool) -> str:
+    """Shown on every report view until a sweep has recorded something."""
+    return empty_state(
+        "No monitoring data yet",
+        "Argus has not recorded a measurement at this vantage point. Run a "
+        "sweep with  python -m argus run-once  and reload; reports are built "
+        "only from stored results.",
+        "<p class='small muted' style='margin:10px 0 0'>The Independent "
+        "Verification page can check a single domain right now without waiting "
+        "for a sweep.</p>")
+
+
+# -- page 1: report selection ----------------------------------------------
+
 def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
-                 flags: dict) -> str:
+                 flags: dict, enabled: bool) -> str:
     """The four-step generator, as plain HTML with no script.
 
-    Two submit buttons: the default previews on this page, and the second uses
-    `formaction` to send the same values to the download route instead.
+    Three submit buttons on one form: preview renders on this page, and the
+    other two use `formaction` to send the same values to the download route.
     """
     types = "".join(_radio("kind", key, title, kind, blurb)
                     for key, title, blurb in reporting.REPORT_TYPES)
-    formats = "".join(_radio("format", f, f.upper(), fmt)
-                      for f in reporting.FORMATS)
+    formats = "".join(
+        _radio("format", key, label, fmt) for key, label in
+        (("pdf", "PDF"), ("csv", "CSV (opens in Excel)")))
     options = "".join(_checkbox("options", key, label, flags.get(key, False))
                       for key, label in reporting.OPTIONS)
 
-    download = ("<button type='submit' class='primary' formaction='"
-                + REPORT_DOWNLOAD + "'>Generate &amp; download</button>"
-                if live else
-                "<span class='muted small'>Downloads need the built-in server: "
-                "<code>python -m argus dashboard</code></span>")
+    if not enabled:
+        actions = ("<p class='small muted' style='margin:0'>Reports need stored "
+                   "measurements. Run <code>python -m argus run-once</code> "
+                   "first.</p>")
+    elif live:
+        actions = ("<button type='submit'>Preview</button>"
+                   "<button type='submit' class='primary' formaction='"
+                   + REPORT_DOWNLOAD + "'>Generate &amp; download</button>")
+    else:
+        actions = ("<button type='submit'>Preview</button>"
+                   "<span class='muted small'>Downloading needs the built-in "
+                   "server: <code>python -m argus dashboard</code></span>")
 
     return ("<form class='builder' method='get' action='"
             + link("reports", live) + "'>"
+            "<input type='hidden' name='view' value='preview'>"
+            "<div class='steps'>"
             "<div class='step'><h4>1. Select report type</h4>"
             "<div class='choices'>" + types + "</div></div>"
             "<div class='step'><h4>2. Select time period</h4>"
@@ -925,15 +981,338 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
             "<div class='field'><label for='until'>To</label>"
             "<input id='until' name='until' type='date' value='" + e(until)
             + "'></div>"
-            "<p class='hint'>Leave both empty for every measurement on record."
-            "</p>"
-            "<h4 style='margin-top:16px'>3. Select format</h4>"
-            "<div class='choices row'>" + formats + "</div></div>"
+            "<p class='hint'>Leave both empty for every measurement on "
+            "record.</p>"
+            "<h4 class='next'>3. Select format</h4>"
+            "<div class='choices'>" + formats + "</div>"
+            "<p class='hint'>CSV carries a byte-order mark, so Excel opens it "
+            "with the columns already split.</p></div>"
             "<div class='step'><h4>4. Options</h4>"
             "<div class='choices'>" + options + "</div>"
-            "<div class='builder-actions'>"
-            "<button type='submit'>Preview</button>" + download
-            + "</div></div></form>")
+            "<div class='builder-actions'>" + actions + "</div></div>"
+            "</div></form>")
+
+
+def _saved_reports(live: bool) -> str:
+    rows = ""
+    for item in reporting.saved_reports():
+        href = REPORT_FILE + "?name=" + e(item["name"])
+        size = ("%.0f KB" % (item["size"] / 1024.0) if item["size"] >= 1024
+                else "%d B" % item["size"])
+        name = ("<a href='" + href + "'>" + e(item["name"]) + "</a>"
+                if live else e(item["name"]))
+        rows += ("<tr><td>" + name + "</td>"
+                 "<td class='small'>" + e(item["kind"]) + "</td>"
+                 "<td><span class='chip'>" + e(item["format"]) + "</span></td>"
+                 "<td class='small muted'>" + ts(item["modified"]) + "</td>"
+                 "<td class='small muted'>" + size + "</td>"
+                 "<td>" + badge("Completed", "ok", True) + "</td></tr>")
+    if not rows:
+        return ("<div class='panel'><h3>Recent reports</h3>"
+                + empty_state("No reports generated yet",
+                              "Generated files are listed here and kept in the "
+                              "reports/ folder.") + "</div>")
+    body = ("<div class='panel flush'><h3>Recent reports</h3>"
+            + table(["File", "Report", "Format", "Generated", "Size", "Status"],
+                    rows, 6) + "</div>")
+    if not live:
+        body += note("Open the files directly from the <code>reports/</code> "
+                     "folder, or start <code>python -m argus dashboard</code> "
+                     "to download them from here.")
+    return body
+
+
+def _selection(storage, live: bool, kind, since, until, fmt, flags) -> str:
+    has_data = _has_data(storage)
+    body = _report_form(live, kind, since, until, fmt, flags, has_data)
+    if not has_data:
+        body += "<div class='panel'>" + _no_data_state(live) + "</div>"
+    body += _saved_reports(live)
+    body += _schedule_panel()
+    return body
+
+
+# -- page 2: report preview -------------------------------------------------
+
+def _evidence_panel(storage, live: bool) -> str:
+    """The two resolution paths behind the most recent recorded difference.
+
+    Both sides are stored measurements: what the monitored resolver answered,
+    and what the authoritative walk returned for the same name at the same
+    moment. The dig commands are the standard-tool equivalent, shown so the
+    comparison can be repeated by hand -- Argus resolves natively.
+    """
+    rows = storage.recent_anomalies(1)
+    if not rows:
+        return ("<h3>Monitoring evidence</h3>"
+                + empty_state("No difference recorded",
+                              "Every measurement so far agreed with the "
+                              "authoritative hierarchy, so there is no "
+                              "comparison to show."))
+    anomaly = rows[0]
+    checks = _evidence(anomaly["checks"])
+    stage1 = checks.get("stage1") or {}
+    stage2 = checks.get("stage2_authoritative") or {}
+    unpublished = set(stage1.get("unpublished") or [])
+    trusted = list(stage2.get("records") or [])
+
+    event = next((r for r in storage.search_events(
+        limit=1, resolver=anomaly["resolver"], domain=anomaly["domain"],
+        rtype=anomaly["rtype"])), None)
+    monitored = []
+    if event is not None and event["returned_records"]:
+        monitored = [x.strip() for x in event["returned_records"].split(",")
+                     if x.strip()]
+
+    def lines(values, mark_extra=False):
+        if not values:
+            return "<span class='muted'>(no records returned)</span>"
+        out = ""
+        for value in values:
+            extra = " extra" if mark_extra and value in unpublished else ""
+            out += ("<div class='" + extra.strip() + "'>" + e(value)
+                    + ("  &larr; not in the trusted answer" if extra else "")
+                    + "</div>")
+        return out
+
+    resolver_ip = ""
+    for r in storage.list_resolvers():
+        if r["name"] == anomaly["resolver"]:
+            resolver_ip = r["address"]
+            break
+
+    classification = anomaly["classification"]
+    result = verdict.short_of(classification)
+    tone = verdict.tone_of(classification)
+
+    return (
+        "<h3>Monitoring evidence</h3>"
+        "<p class='sub'>The most recent difference on record: <b>"
+        + e(anomaly["domain"]) + "</b> (" + e(anomaly["rtype"]) + ") on <b>"
+        + e(anomaly["resolver"]) + "</b>, " + ts(anomaly["observed_at"])
+        + ".</p>"
+        "<div class='paths'>"
+        "<div class='pathbox untrusted'><h4>Untrusted path &mdash; the cache</h4>"
+        "<code class='cmd'>dig +short @" + e(resolver_ip or "&lt;resolver&gt;")
+        + " " + e(anomaly["domain"]) + " " + e(anomaly["rtype"]) + "</code>"
+        "<div class='ans'>" + lines(monitored, mark_extra=True) + "</div></div>"
+        "<div class='pathbox trusted'><h4>Trusted path &mdash; walked from the "
+        "root</h4>"
+        "<code class='cmd'>dig +trace " + e(anomaly["domain"]) + " "
+        + e(anomaly["rtype"]) + "</code>"
+        "<div class='ans'>" + lines(trusted) + "</div></div>"
+        "</div>"
+        "<div class='verdictline'>" + badge(result, tone) + "<b>"
+        + e(verdict.verdict_of(classification)) + "</b>"
+        "<span>" + e(anomaly["reason"] or stage1.get("reason") or "") + "</span>"
+        "</div>"
+        "<p class='sub' style='margin-top:10px'>Argus resolves natively rather "
+        "than shelling out to dig; the commands above reproduce the same "
+        "comparison with standard tools. <code>dig +trace</code> fetches "
+        "out-of-bailiwick glue through the local system resolver, whereas the "
+        "trusted path sub-walks from the root for it.</p>")
+
+
+def _paper(storage, report, live: bool) -> str:
+    """The report rendered as a sheet, the way the PDF lays it out."""
+    return ("<div class='paper'>"
+            "<div class='paper-head'>" + ASSET_LOGO
+            + "<div class='paper-meta'><b>" + e(report.title) + "</b>"
+            "Period: " + e(report.period) + "<br>"
+            "Generated: " + ts(report.generated_at) + "<br>"
+            "Vantage: " + e(report.vantage) + "</div></div>"
+            + _preview(report, live)
+            + _evidence_panel(storage, live)
+            + "</div>")
+
+
+def _preview_view(storage, live: bool, report, fmt: str, query: str) -> str:
+    if not _has_data(storage):
+        return "<div class='panel'>" + _no_data_state(live) + "</div>"
+    actions = ""
+    if live:
+        actions = ("<a class='action primary' href='" + REPORT_DOWNLOAD + query
+                   + "&amp;format=pdf'>" + ICON_REPORT + "Download PDF</a>"
+                   "<a class='action' href='" + REPORT_DOWNLOAD + query
+                   + "&amp;format=csv'>Download CSV</a>")
+    else:
+        actions = ("<span class='muted small'>Start <code>python -m argus "
+                   "dashboard</code> to download this report.</span>")
+    return ("<div class='builder-actions' style='margin:0 0 16px'>"
+            "<a class='action' href='" + _view_link(live, "selection")
+            + "'>&larr; Back to reports</a>" + actions + "</div>"
+            + _paper(storage, report, live))
+
+
+# -- pages 3-6: the individual report views ---------------------------------
+
+def _report_view(storage, live: bool, report) -> str:
+    """A built report shown as dashboard sections rather than as a sheet."""
+    if not _has_data(storage):
+        return "<div class='panel'>" + _no_data_state(live) + "</div>"
+    return ("<div class='builder-actions' style='margin:0 0 16px'>"
+            "<a class='action' href='" + _view_link(live, "selection")
+            + "'>&larr; Back to reports</a>"
+            + ("<a class='action primary' href='" + REPORT_DOWNLOAD
+               + "?kind=" + report.kind + "&amp;format=pdf'>" + ICON_REPORT
+               + "Download PDF</a>" if live else "")
+            + "</div>" + _preview(report, live))
+
+
+def _domain_view(storage, live: bool, params: dict) -> str:
+    """Page 5. The table is filtered and paged here, over real rows only."""
+    if not _has_data(storage):
+        return "<div class='panel'>" + _no_data_state(live) + "</div>"
+
+    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
+    search, category, status = get("q").lower(), get("category"), get("status")
+    try:
+        from ..config import load_settings
+        categories = load_settings().categories
+    except Exception:                                      # noqa: BLE001
+        categories = {}
+
+    rows = []
+    for r in storage.rollup("domain"):
+        label = categories.get(r["key"], "")
+        state = ("Poisoning" if r["poisoning"]
+                 else ("Under review" if r["flagged"] else "Healthy"))
+        if search and search not in r["key"].lower():
+            continue
+        if category and label != category:
+            continue
+        if status and state != status:
+            continue
+        rows.append((r, label, state))
+
+    options = sorted({c for c in categories.values() if c})
+    form = ("<form class='filterbar' method='get' action='"
+            + link("reports", live) + "'>"
+            "<input type='hidden' name='view' value='domain'>"
+            + _select("category", "Category", options, category)
+            + _select("status", "Status",
+                      ["Healthy", "Under review", "Poisoning"], status)
+            + "<div class='field grow'><label for='q'>Search</label>"
+            "<input id='q' name='q' value='" + e(get("q"))
+            + "' placeholder='Search domain...'></div>"
+            "<button type='submit'>Filter</button>"
+            "<a class='btn' href='" + _view_link(live, "domain")
+            + "'>Reset</a></form>")
+
+    tones = {"Healthy": "ok", "Under review": "warn", "Poisoning": "bad"}
+    body = ""
+    for r, label, state in rows:
+        body += ("<tr><td><b>" + e(r["key"]) + "</b></td>"
+                 "<td class='small'>" + (e(label) or "<span class='muted'>"
+                                         "&mdash;</span>") + "</td>"
+                 "<td>" + "{:,}".format(r["checks"]) + "</td>"
+                 "<td>" + ("<b>%d</b>" % r["flagged"] if r["flagged"] else "0")
+                 + "</td>"
+                 "<td class='small muted'>" + ts(r["last_seen"]) + "</td>"
+                 "<td>" + badge(state, tones[state], True) + "</td></tr>")
+
+    tiles = ("<div class='kpis'>"
+             + kpi("info", KPI_ICONS["domains"], str(len(rows)),
+                   "Domains listed")
+             + kpi("ok", KPI_ICONS["resolvers"],
+                   str(sum(1 for _r, _l, s in rows if s == "Healthy")),
+                   "Fully corroborated")
+             + kpi("warn", KPI_ICONS["anomalies"],
+                   str(sum(1 for _r, _l, s in rows if s == "Under review")),
+                   "Under review")
+             + kpi("bad" if any(s == "Poisoning" for _r, _l, s in rows) else "ok",
+                   KPI_ICONS["uptime"],
+                   str(sum(1 for _r, _l, s in rows if s == "Poisoning")),
+                   "With possible poisoning")
+             + "</div>")
+
+    listing = (table(["Domain", "Category", "Total checks", "Flagged",
+                      "Last checked", "Status"], body, 6)
+               if body else empty_state(
+                   "No domain matches these filters",
+                   "Clear the filters to see every monitored domain."))
+
+    return ("<div class='builder-actions' style='margin:0 0 16px'>"
+            "<a class='action' href='" + _view_link(live, "selection")
+            + "'>&larr; Back to reports</a>"
+            + ("<a class='action primary' href='" + REPORT_DOWNLOAD
+               + "?kind=domains&amp;format=pdf'>" + ICON_REPORT
+               + "Download PDF</a>" if live else "")
+            + "</div>" + tiles + "<div class='panel'>" + form + listing
+            + "</div>")
+
+
+def _schedule_panel() -> str:
+    """How to produce reports on a schedule.
+
+    Argus has no scheduler of its own for this, and adding one would duplicate
+    something every operating system already does well, so the page hands over
+    the exact line to install instead of pretending to own it.
+    """
+    return ("<div class='panel'><h3>Scheduled reports</h3>"
+            "<p class='sub'>Argus does not run its own report scheduler. On "
+            "Linux, <code>cron</code> produces the same files on any cadence "
+            "&mdash; this line writes a weekly summary every Monday at 06:00, "
+            "into <code>reports/</code>:</p>"
+            # One line, deliberately: a crontab entry cannot be continued
+            # across lines, so a wrapped command would be copied and then fail.
+            "<pre class='cmd'>0 6 * * 1 cd /path/to/argus &amp;&amp; "
+            ".venv/bin/python -m argus export --type summary --format pdf "
+            "--days 7 --no-open</pre>"
+            "<p class='sub' style='margin-bottom:0'>Install it with "
+            "<code>crontab -e</code>. Use <code>--type</code> and "
+            "<code>--days</code> to match any of the report types above.</p>"
+            "</div>")
+
+
+def reports(storage, live: bool, params: dict) -> str:
+    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
+    view = get("view") or "selection"
+    if view not in dict(REPORT_VIEWS):
+        view = "selection"
+
+    kind = get("kind") or "summary"
+    if kind not in reporting.REPORT_TITLES:
+        kind = "summary"
+    fmt = get("format") if get("format") in reporting.FORMATS else "pdf"
+    since_raw, until_raw = get("since"), get("until")
+    flags = reporting.resolve_options(
+        params.get("options") if "options" in params else None)
+
+    body = _tabs(live, view)
+
+    if view == "selection":
+        return body + _selection(storage, live, kind, since_raw, until_raw,
+                                 fmt, flags)
+    if view == "domain":
+        return body + _domain_view(storage, live, params)
+
+    # The remaining views are a built report, rendered two ways.
+    fixed = {"summary": "summary", "resolver": "health", "alerts": "alerts"}
+    built_kind = fixed.get(view, kind)
+    if not _has_data(storage):
+        return body + "<div class='panel'>" + _no_data_state(live) + "</div>"
+
+    report = reporting.build(
+        storage, built_kind,
+        since=reporting.parse_day(since_raw),
+        until=reporting.parse_day(until_raw, end_of_day=True),
+        vantage=_vantage(storage), options=flags)
+
+    if view == "preview":
+        query = ("?kind=" + built_kind
+                 + ("&amp;since=" + e(since_raw) if since_raw else "")
+                 + ("&amp;until=" + e(until_raw) if until_raw else ""))
+        return body + _preview_view(storage, live, report, fmt, query)
+    return body + _report_view(storage, live, report)
+
+
+def _vantage(_storage) -> str:
+    try:
+        from ..config import load_settings
+        return load_settings().vantage
+    except Exception:                                      # noqa: BLE001
+        return "local"
 
 
 def _preview(report, live: bool) -> str:
@@ -961,6 +1340,24 @@ def _preview(report, live: bool) -> str:
                 rows += ("<tr><td><b>" + e(label) + "</b></td>"
                          "<td style='width:70%'>" + bar(value, tone) + "</td></tr>")
             out += table(["", ""], rows, 2)
+
+        elif section.kind == "donut":
+            out += donut(section.payload)
+
+        elif section.kind == "trend":
+            out += linechart([{"name": entry["name"],
+                               "colour": SERIES_COLOURS[i % len(SERIES_COLOURS)],
+                               "points": entry["points"]}
+                              for i, entry in enumerate(section.payload)])
+
+        elif section.kind == "findings":
+            out += findings(section.payload)
+
+        elif section.kind == "scorecards":
+            out += "<div class='scores'>"
+            for name, value, status, tone in section.payload:
+                out += scorecard(name, value, status, tone)
+            out += "</div>"
 
         elif section.kind == "stack":
             total = sum(v for _l, v, _t in section.payload) or 1
@@ -998,82 +1395,3 @@ def _preview(report, live: bool) -> str:
     return out
 
 
-def _saved_reports(live: bool) -> str:
-    rows = ""
-    for item in reporting.saved_reports():
-        href = REPORT_FILE + "?name=" + e(item["name"])
-        size = ("%.0f KB" % (item["size"] / 1024.0) if item["size"] >= 1024
-                else "%d B" % item["size"])
-        name = ("<a href='" + href + "'>" + e(item["name"]) + "</a>"
-                if live else e(item["name"]))
-        rows += ("<tr><td>" + name + "</td>"
-                 "<td class='small'>" + e(item["kind"]) + "</td>"
-                 "<td><span class='chip'>" + e(item["format"]) + "</span></td>"
-                 "<td class='small muted'>" + ts(item["modified"]) + "</td>"
-                 "<td class='small muted'>" + size + "</td></tr>")
-    body = table(["File", "Report", "Format", "Generated", "Size"], rows, 5)
-    if not live and rows:
-        body += note("Open the files directly from the <code>reports/</code> "
-                     "folder, or start <code>python -m argus dashboard</code> "
-                     "to download them from here.")
-    return body
-
-
-def _schedule_panel() -> str:
-    """How to produce reports on a schedule.
-
-    Argus has no scheduler of its own for this, and adding one would duplicate
-    something every operating system already does well, so the page hands over
-    the exact line to install instead of pretending to own it.
-    """
-    return ("<div class='panel'><h3>Scheduled reports</h3>"
-            "<p class='sub'>Argus does not run its own report scheduler. On "
-            "Linux, <code>cron</code> produces the same files on any cadence "
-            "&mdash; this line writes a weekly summary every Monday at 06:00, "
-            "into <code>reports/</code>:</p>"
-            # One line, deliberately: a crontab entry cannot be continued
-            # across lines, so a wrapped command would be copied and then fail.
-            "<pre class='cmd'>0 6 * * 1 cd /path/to/argus &amp;&amp; "
-            ".venv/bin/python -m argus export --type summary --format pdf "
-            "--days 7 --no-open</pre>"
-            "<p class='sub' style='margin-bottom:0'>Install it with "
-            "<code>crontab -e</code>. Use <code>--type</code> and "
-            "<code>--days</code> to match any of the report types above.</p>"
-            "</div>")
-
-
-def reports(storage, live: bool, params: dict) -> str:
-    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
-    kind = get("kind") or "summary"
-    if kind not in reporting.REPORT_TITLES:
-        kind = "summary"
-    fmt = get("format") if get("format") in reporting.FORMATS else "pdf"
-    since_raw, until_raw = get("since"), get("until")
-
-    # An untouched form submits no checkboxes at all, which is indistinguishable
-    # from every option being cleared. The first visit therefore uses the
-    # defaults, and only a real submission is read as a set of choices.
-    submitted = any(k in params for k in ("kind", "format", "since", "until"))
-    flags = (reporting.resolve_options(params.get("options_list") or [])
-             if submitted else dict(reporting.DEFAULT_OPTIONS))
-
-    body = ("<div class='split reportsplit'><div class='col'>"
-            "<div class='panel'><h3>Generate a report</h3>"
-            + _report_form(live, kind, since_raw, until_raw, fmt, flags)
-            + "</div></div><div class='col'>"
-            "<div class='panel flush'><h3>Saved reports</h3>"
-            + _saved_reports(live) + "</div>"
-            + _schedule_panel() + "</div></div>")
-
-    report = reporting.build(
-        storage, kind,
-        since=reporting.parse_day(since_raw),
-        until=reporting.parse_day(until_raw, end_of_day=True),
-        vantage="", options=flags)
-
-    body += ("<h2>Preview &mdash; " + e(report.title) + "</h2>"
-             + note("Covering <b>" + e(report.period) + "</b>. The download "
-                    "contains exactly these sections; the PDF adds page "
-                    "headers and numbering.")
-             + _preview(report, live))
-    return body

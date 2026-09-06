@@ -84,8 +84,9 @@ class Scheduler:
         # Seed reference tables (upsert; never deletes).
         for resolver in resolvers:
             self.storage.upsert_resolver(resolver)
+        categories = self.settings.categories
         for domain in domains:
-            self.storage.upsert_domain(domain)
+            self.storage.upsert_domain(domain, categories.get(domain, ""))
 
         # 1. ground truth once per (domain, rtype), shared across all resolvers.
         #

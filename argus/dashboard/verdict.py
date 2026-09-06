@@ -98,6 +98,30 @@ def short_of(classification: str) -> str:
     return _SHORT.get((classification or "").upper(), "Unclassified")
 
 
+# Severity, for report tables that rank findings by how much attention they
+# need. This is a DISPLAY mapping over the stored classification, exactly like
+# the verdict mapping above -- the engine never decides a severity, and nothing
+# here can promote a finding the engine did not already make.
+HIGH, MEDIUM, LOW = "High", "Medium", "Low"
+
+_SEVERITY = {
+    "POSSIBLE_CACHE_POISONING": (HIGH, "bad"),
+    "DNS_INTEGRITY_ANOMALY": (MEDIUM, "warn"),
+    "ANOMALY": (MEDIUM, "warn"),
+    "TEMPORARY_ANOMALY": (LOW, "muted"),
+    "VERIFICATION_FAILED": (LOW, "muted"),
+}
+
+
+def severity_of(classification: str) -> str:
+    """How much attention a stored classification warrants. "" when none."""
+    return _SEVERITY.get((classification or "").upper(), ("", "muted"))[0]
+
+
+def severity_tone(classification: str) -> str:
+    return _SEVERITY.get((classification or "").upper(), ("", "muted"))[1]
+
+
 def verdict_of(classification: str) -> str:
     """The reported verdict for a stored classification."""
     return _MAP.get((classification or "").upper(), (INCONCLUSIVE, "muted", ""))[0]
