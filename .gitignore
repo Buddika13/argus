@@ -23,6 +23,8 @@ queries.html
 anomalies.html
 verification.html
 reports.html
+domains.html
+settings.html
 
 # Sweep lock (created and removed automatically by argus run-once / serve).
 *.sweep.lock

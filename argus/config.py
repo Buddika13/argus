@@ -123,6 +123,15 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     )
 
 
+def _coord(value):
+    """A map coordinate as a percentage, or None if absent or out of range."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 0.0 <= number <= 100.0 else None
+
+
 def load_resolvers(path: Path) -> list[MonitoredResolver]:
     if not path.exists():
         return []
@@ -137,6 +146,8 @@ def load_resolvers(path: Path) -> list[MonitoredResolver]:
             country=entry.get("country", "unknown"),
             port=int(entry.get("port", 53)),
             enabled=bool(entry.get("enabled", True)),
+            map_x=_coord(entry.get("map_x")),
+            map_y=_coord(entry.get("map_y")),
         ))
     return out
 

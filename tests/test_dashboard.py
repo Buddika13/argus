@@ -25,8 +25,8 @@ from argus.dashboard import verdict
 from argus.dashboard.live import render_page
 from argus.storage import Storage
 
-PAGE_KEYS = ("overview", "resolvers", "poisoning", "queries", "anomalies",
-             "verification", "reports")
+PAGE_KEYS = ("overview", "resolvers", "domains", "poisoning", "queries",
+             "anomalies", "verification", "reports", "settings")
 
 
 class DashboardTests(unittest.TestCase):
@@ -53,9 +53,10 @@ class DashboardTests(unittest.TestCase):
             "overview": ("System totals", "Resolver status summary"),
             "resolvers": ("Availability", "Correctness"),
             "poisoning": ("Cache Poisoning Detection",),
-            "queries": ("DNS Query Monitor", "Classification"),
-            "anomalies": ("Anomaly Investigation", "Legitimate explanations tested"),
-            "verification": ("Independent Verification", "Monitored resolver"),
+            "domains": ("Domains", "watch-list"),
+            "queries": ("Results", "Classification"),
+            "anomalies": ("Alerts", "Legitimate explanations tested"),
+            "verification": ("Monitoring", "Monitored resolver"),
             # Section names follow the supplied six-page report UI.
             "reports": ("Summary report", "Resolver health report",
                         "Alerts report", "1. Select report type",

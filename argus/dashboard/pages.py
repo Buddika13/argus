@@ -15,10 +15,11 @@ import json
 from .. import reporting
 from . import verdict
 from .shell import (ASSET_LOGO, HEALTHY, ICON_PLAY, ICON_REPORT, KPI_ICONS,
-                    NO_DATA, donut, empty_state, findings, scorecard,
-                    SERIES_COLOURS, STATUS_SEVERITY, badge, bar, e, gauge, kpi,
-                    linechart, link, ms, note, pagehead, pct, rate, records,
-                    resolver_status, sparkline, status_tone, table, ts)
+                    NO_DATA, SERIES_COLOURS, STATUS_SEVERITY, badge, bar, donut,
+                    e, empty_state, findings, gauge, kpi, linechart, link, ms,
+                    national_map, note, pagehead, pct, rate, records,
+                    resolver_status, scorecard, sparkline, status_tone, table,
+                    ts)
 
 PAGE_SIZE = 25
 
@@ -154,6 +155,33 @@ def _watchlist_size(storage) -> int:
 def _mean(values):
     values = [v for v in values if isinstance(v, (int, float))]
     return sum(values) / len(values) if values else None
+
+
+def _resolver_map(rows) -> str:
+    """The national map, with a marker per resolver that has coordinates.
+
+    Positions come from `map_x` / `map_y` in resolvers.yaml. Nothing is
+    inferred from an IP address or a country code: a marker on a national map
+    is a factual claim about where infrastructure sits, so it is drawn only
+    where the operator has stated one.
+    """
+    try:
+        from ..config import load_settings
+        configured = load_settings().resolvers
+    except Exception:                                  # noqa: BLE001
+        configured = []
+    tones = {x["name"]: status_tone(x["status"]) for x in rows}
+
+    markers = ""
+    for resolver in configured:
+        if not (resolver.enabled and resolver.has_location):
+            continue
+        tone = tones.get(resolver.name, "muted")
+        markers += ('<circle class="marker %s" cx="%.2f" cy="%.2f" r="2.4">'
+                    "<title>%s (%s)</title></circle>"
+                    % (tone if tone in ("bad", "warn") else "", resolver.map_x,
+                       resolver.map_y, e(resolver.name), e(resolver.address)))
+    return national_map(markers)
 
 
 def _health_dimensions(rows) -> str:
@@ -364,6 +392,11 @@ def overview(storage, live: bool) -> str:
 
     body += "</div><div class='col'>"
 
+    body += ("<div class='panel'><h3>Sri Lanka resolver map</h3>"
+             "<p class='sub'>Markers are drawn only for resolvers whose "
+             "configuration carries a real location.</p>"
+             + _resolver_map(rows) + "</div>")
+
     body += ("<div class='panel'><h3>Health dimension overview</h3>"
              "<p class='sub'>Averaged across resolvers that have been measured. "
              "Each ring is one stored metric, never a blended score.</p>"
@@ -444,6 +477,100 @@ def resolvers(storage, live: bool, selected: str = "") -> str:
         body += ("<div class='panel'><h3>Recent measurements</h3>"
                  + table(["When", "Domain", "RCODE", "Verdict"], recent, 4) + "</div>")
         body += "</div>"
+    return body
+
+
+# -- 2b. DOMAINS ------------------------------------------------------------
+
+def domains(storage, live: bool, params: dict) -> str:
+    """The watch-list, with how each domain has behaved.
+
+    Rows come from the measurements actually recorded, so a domain that has
+    never been checked is absent rather than shown with invented zeroes.
+    """
+    get = lambda k: (params.get(k) or "").strip()      # noqa: E731
+    search, category, status = get("q").lower(), get("category"), get("status")
+    try:
+        from ..config import load_settings
+        settings = load_settings()
+        labels, watched = settings.categories, set(settings.watchlist)
+    except Exception:                                  # noqa: BLE001
+        labels, watched = {}, set()
+
+    rows = []
+    for r in storage.rollup("domain"):
+        label = labels.get(r["key"], "")
+        state = ("Mismatch" if r["poisoning"]
+                 else ("Under review" if r["flagged"] else "Healthy"))
+        if search and search not in r["key"].lower():
+            continue
+        if category and label != category:
+            continue
+        if status and state != status:
+            continue
+        rows.append((r, label, state))
+
+    if not storage.table_counts().get("query_results", 0):
+        return ("<div class='panel'>" + empty_state(
+            "No monitoring data yet",
+            "The watch-list holds %d domain%s, but none has been checked at "
+            "this vantage point. Run  python -m argus run-once  and reload."
+            % (len(watched), "" if len(watched) == 1 else "s")) + "</div>")
+
+    tones = {"Healthy": "ok", "Under review": "warn", "Mismatch": "bad"}
+    listing = ""
+    for r, label, state in rows:
+        check = link("verification", live, "?domain=" + e(r["key"]) + "&amp;rtype=A")
+        listing += ("<tr><td><b>" + e(r["key"]) + "</b></td>"
+                    "<td class='small'>" + (e(label) or
+                                            "<span class='muted'>&mdash;</span>")
+                    + "</td>"
+                    "<td>" + "{:,}".format(r["checks"]) + "</td>"
+                    "<td>" + ("<b>%d</b>" % r["flagged"] if r["flagged"] else "0")
+                    + "</td>"
+                    "<td class='small muted'>" + ts(r["last_seen"]) + "</td>"
+                    "<td>" + badge(state, tones[state], True) + "</td>"
+                    "<td><a class='btn' href='" + check + "'>Run check</a></td>"
+                    "</tr>")
+
+    body = ("<div class='kpis'>"
+            + kpi("info", KPI_ICONS["domains"], str(len(rows)), "Domains listed",
+                  "")
+            + kpi("ok", KPI_ICONS["resolvers"],
+                  str(sum(1 for _r, _l, x in rows if x == "Healthy")),
+                  "Fully corroborated", "")
+            + kpi("warn", KPI_ICONS["anomalies"],
+                  str(sum(1 for _r, _l, x in rows if x == "Under review")),
+                  "Under review", "")
+            + kpi("bad" if any(x == "Mismatch" for _r, _l, x in rows) else "ok",
+                  KPI_ICONS["uptime"],
+                  str(sum(1 for _r, _l, x in rows if x == "Mismatch")),
+                  "With a mismatch", "")
+            + "</div>")
+
+    options = sorted({c for c in labels.values() if c})
+    body += ("<form class='filterbar' method='get' action='"
+             + link("domains", live) + "'>"
+             + _select("category", "Category", options, category)
+             + _select("status", "Status", ["Healthy", "Under review",
+                                            "Mismatch"], status)
+             + "<div class='field grow'><label for='q'>Search</label>"
+             "<input id='q' name='q' value='" + e(get("q"))
+             + "' placeholder='Search domain...'></div>"
+             "<button type='submit'>Filter</button>"
+             "<a class='btn' href='" + link("domains", live) + "'>Reset</a>"
+             "</form>")
+
+    body += (table(["Domain", "Category", "Total checks", "Flagged",
+                    "Last checked", "Status", ""], listing, 7)
+             if listing else "<div class='panel'>" + empty_state(
+                 "No domain matches these filters",
+                 "Clear the filters to see every monitored domain.") + "</div>")
+    body += ("<p class='small muted'>Categories come from the section headings "
+             "in <code>config/watchlist.txt</code>. A flagged answer is a "
+             "question, not a finding &mdash; the "
+             "<a href='" + link("anomalies", live) + "'>Alerts</a> page shows "
+             "how each was tested.</p>")
     return body
 
 
@@ -1263,6 +1390,109 @@ def _schedule_panel() -> str:
             "<code>crontab -e</code>. Use <code>--type</code> and "
             "<code>--days</code> to match any of the report types above.</p>"
             "</div>")
+
+
+def settings(storage, live: bool) -> str:
+    """The configuration in force, and the file that sets each value.
+
+    Read-only by design. The dashboard is a view of the database; letting a
+    browser rewrite the files that decide what gets queried would make the
+    monitoring configuration untraceable, so every row names the file to edit.
+    """
+    try:
+        from ..config import load_settings
+        cfg = load_settings()
+    except Exception as exc:                           # noqa: BLE001
+        return "<div class='panel'>" + empty_state(
+            "Configuration could not be read", str(exc)) + "</div>"
+
+    counts = storage.table_counts()
+    schedule, query = cfg.schedule, cfg.query
+    enabled = cfg.enabled_resolvers
+
+    def row(label, value, source):
+        return ("<tr><td><b>" + e(label) + "</b></td>"
+                "<td class='mono'>" + e(value) + "</td>"
+                "<td class='small muted'><code>" + e(source) + "</code></td></tr>")
+
+    general = (row("Vantage name", cfg.vantage, "config/config.yaml: vantage")
+               + row("Sweep interval",
+                     "%d s (%d min)" % (schedule["interval_seconds"],
+                                        max(1, schedule["interval_seconds"] // 60)),
+                     "config/config.yaml: schedule.interval_seconds")
+               + row("Concurrency", str(schedule.get("concurrency", 1)),
+                     "config/config.yaml: schedule.concurrency")
+               + row("Pause between queries",
+                     "%.2f s" % schedule.get("per_resolver_delay", 0.0),
+                     "config/config.yaml: schedule.per_resolver_delay")
+               + row("Query timeout", "%.1f s" % query["timeout_seconds"],
+                     "config/config.yaml: query.timeout_seconds")
+               + row("Retries per query", str(query["retries"]),
+                     "config/config.yaml: query.retries")
+               + row("Record types", ", ".join(query["rtypes"]),
+                     "config/config.yaml: query.rtypes")
+               + row("TTL inflation threshold",
+                     "%.2fx" % cfg.freshness["max_ttl_ratio"],
+                     "config/config.yaml: freshness.max_ttl_ratio")
+               + row("DNSSEC checks",
+                     "enabled" if cfg.raw.get("dnssec", {}).get("enabled", True)
+                     else "disabled", "config/config.yaml: dnssec.enabled")
+               + row("Database", str(cfg.db_path),
+                     "config/config.yaml: storage.path")
+               + row("Report output", str(reporting.reports_dir()),
+                     "written by argus export"))
+
+    verification = "".join(
+        row(label, str(cfg.verification.get(key)), "config/config.yaml: verification." + key)
+        for key, label in (("requery", "Re-query the resolver"),
+                           ("rewalk", "Re-walk the hierarchy"),
+                           ("control_crosscheck", "Cross-check resolvers"),
+                           ("persistence", "Repeats required")))
+
+    resolvers = ""
+    for r in cfg.resolvers:
+        resolvers += ("<tr><td><b>" + e(r.name) + "</b></td>"
+                      "<td class='mono'>" + e(r.address) + "</td>"
+                      "<td><span class='chip'>" + e(r.role.upper())
+                      + "</span></td><td class='small'>" + e(r.isp) + "</td>"
+                      "<td>" + badge("enabled" if r.enabled else "disabled",
+                                     "ok" if r.enabled else "muted", True)
+                      + "</td>"
+                      "<td class='small muted'>"
+                      + ("%.1f, %.1f" % (r.map_x, r.map_y) if r.has_location
+                         else "not set") + "</td></tr>")
+
+    body = ("<div class='kpis'>"
+            + kpi("ok", KPI_ICONS["resolvers"],
+                  "%d / %d" % (len(enabled), len(cfg.resolvers)),
+                  "Resolvers enabled", link("resolvers", live))
+            + kpi("info", KPI_ICONS["domains"], str(len(cfg.watchlist)),
+                  "Domains watched", link("domains", live))
+            + kpi("muted", KPI_ICONS["uptime"],
+                  "%d min" % max(1, schedule["interval_seconds"] // 60),
+                  "Sweep interval", "")
+            + kpi("muted", KPI_ICONS["anomalies"],
+                  "{:,}".format(counts.get("query_results", 0)),
+                  "Measurements stored", link("queries", live))
+            + "</div>")
+
+    body += note("These values are read from the configuration files on every "
+                 "request. The dashboard never writes them: edit the file "
+                 "named beside each value, then run a sweep for it to take "
+                 "effect.")
+    body += "<h2>General</h2>"
+    body += table(["Setting", "Value in force", "Set in"], general, 3)
+    body += "<h2>Verification engine</h2>"
+    body += table(["Stage", "Value in force", "Set in"], verification, 3)
+    body += "<h2>Configured resolvers</h2>"
+    body += table(["Name", "Address", "Role", "Operator", "State",
+                   "Map position"], resolvers, 6)
+    body += ("<p class='small muted'>Edit <code>config/resolvers.yaml</code> to "
+             "add a resolver or set <code>map_x</code> / <code>map_y</code> "
+             "(0-100) so it appears on the national map. Edit "
+             "<code>config/watchlist.txt</code> to change the domains, keeping "
+             "each under its category heading.</p>")
+    return body
 
 
 def reports(storage, live: bool, params: dict) -> str:

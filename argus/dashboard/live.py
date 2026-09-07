@@ -178,6 +178,10 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
                 result = {"error": "The verification check could not be "
                                    "completed: %s" % exc}
         body = pages.verification(storage, live, params, result)
+    elif key == "domains":
+        body = pages.domains(storage, live, params)
+    elif key == "settings":
+        body = pages.settings(storage, live)
     elif key == "reports":
         body = pages.reports(storage, live, params)
     else:

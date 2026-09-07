@@ -122,6 +122,15 @@ class MonitoredResolver:
     country: str = "unknown"
     port: int = 53
     enabled: bool = True
+    # Optional position on the national map, as percentages of the outline's
+    # bounding box. Left unset unless the operator supplies a real location:
+    # the dashboard draws no marker rather than inventing one.
+    map_x: float | None = None
+    map_y: float | None = None
+
+    @property
+    def has_location(self) -> bool:
+        return self.map_x is not None and self.map_y is not None
 
     @property
     def is_control(self) -> bool:

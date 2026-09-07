@@ -18,24 +18,29 @@ import time
 
 # key, static filename, server path, title, purpose blurb
 PAGES = (
-    ("overview", "report.html", "/", "Overview",
-     "System-wide status at a glance. Detail lives on the pages below."),
-    ("resolvers", "resolvers.html", "/resolvers", "Resolver Health",
+    ("overview", "report.html", "/", "Dashboard",
+     "National view: what is monitored, what it found, and where it looked."),
+    ("resolvers", "resolvers.html", "/resolvers", "Resolvers",
      "Availability, latency, correctness and freshness for every monitored "
      "caching resolver."),
+    ("domains", "domains.html", "/domains", "Domains",
+     "The watch-list: what is checked, how often it agreed, and when it was "
+     "last seen."),
+    ("verification", "verification.html", "/verification", "Monitoring",
+     "Run one domain against a resolver and the authoritative hierarchy, live: "
+     "the untrusted path beside the trusted one."),
+    ("queries", "queries.html", "/queries", "Results",
+     "Every measurement taken, searchable and filterable."),
+    ("anomalies", "anomalies.html", "/anomalies", "Alerts",
+     "Differences under review by severity, and the legitimate explanations "
+     "each was tested against."),
     ("poisoning", "poisoning.html", "/poisoning", "Cache Poisoning Detection",
      "Events where a resolver served data no independent source corroborates, "
      "with the full evidence behind each verdict."),
-    ("queries", "queries.html", "/queries", "DNS Query Monitor",
-     "Every measurement taken, searchable and filterable."),
-    ("anomalies", "anomalies.html", "/anomalies", "Anomaly Investigation",
-     "Differences under review, and the legitimate explanations each was "
-     "tested against."),
-    ("verification", "verification.html", "/verification", "Independent Verification",
-     "Query one resolver against cross-check resolvers and the authoritative "
-     "hierarchy, live."),
     ("reports", "reports.html", "/reports", "Reports",
-     "Summaries suitable for inclusion in a written report."),
+     "Generate PDF and CSV reports from stored monitoring data."),
+    ("settings", "settings.html", "/settings", "Settings",
+     "The configuration currently in force, and the file that sets each value."),
 )
 
 PAGE_BY_KEY = {p[0]: p for p in PAGES}
@@ -403,6 +408,12 @@ NAV_ICONS = {
                           '4.5-5"/>', 18),
     "reports": _icon('<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>'
                      '<path d="M9 12h6M9 16h6"/>', 18),
+    "domains": _icon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
+                     '<path d="M12 3c2.6 3 2.6 15 0 18-2.6-3-2.6-15 0-18z"/>', 18),
+    "settings": _icon('<circle cx="12" cy="12" r="3.2"/>'
+                      '<path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6'
+                      'M18.6 5.4 17 7M7 17l-1.6 1.6M18.6 18.6 17 17M7 7 5.4 '
+                      '5.4"/>', 18),
 }
 
 ICON_CHEVRON = _icon('<path d="m9 5 7 7-7 7"/>', 16)
@@ -441,19 +452,37 @@ ASSET_LOGO = (
     '<text x="158" y="78" font-family="Arial, Helvetica, sans-serif" '
     'font-size="11" fill="#c9d7e7">National DNS Monitoring</text></svg>')
 
-# A stylised island, not a survey-accurate coastline -- it is decoration in the
-# sidebar, and the supplied asset is kept as the designer drew it.
+# The national outline, traced from the project's own reference map
+# (assets/sri-lanka-dns-map-reference.png) by thresholding the land, taking the
+# coastline row by row and simplifying it. Derived from that image rather than
+# drawn by hand, so the shape is the real one; 160 points in a 0-100 box.
+LANKA_PATH = ("M14.5 0.0L14.5 1.3L14.9 2.6L15.1 3.8L15.3 5.1L20.8 6.4L21.0 7.7L23.2 9.0L23.2 10.2L22.0 11.5L22.8 12.8L23.2 14.1L23.0 15.4L22.2 16.7L18.3 17.9L14.3 19.2L13.4 20.5L13.0 21.8L12.8 23.1L12.2 24.3L11.6 25.6L11.2 26.9L11.2 28.2L11.0 29.5L9.8 30.7L9.0 32.0L6.7 33.3L6.3 34.6L5.3 35.9L5.1 37.1L4.5 38.4L4.5 39.7L4.5 41.0L4.7 42.3L4.7 43.5L3.7 44.8L3.5 46.1L2.4 47.4L1.0 48.7L1.0 50.0L1.4 51.2L1.4 52.5L0.0 53.8L0.0 55.1L0.0 56.4L1.4 57.6L1.4 58.9L0.8 60.2L0.6 61.5L1.0 62.8L7.5 64.0L12.0 65.3L12.4 66.6L12.4 67.9L12.4 69.2L12.4 70.4L3.7 71.7L3.3 73.0L3.3 74.3L4.7 75.6L4.9 76.8L5.5 78.1L6.7 79.4L6.5 80.7L6.5 82.0L8.1 83.3L8.3 84.5L8.8 85.8L8.8 87.1L9.8 88.4L10.4 89.7L10.6 90.9L11.2 92.2L12.4 93.5L14.3 94.8L19.8 96.1L21.6 97.3L22.2 98.6L22.2 99.9L22.3 100.0L59.4 100.0L59.5 99.9L61.7 98.6L66.6 97.3L68.0 96.1L75.0 94.8L80.0 93.5L87.6 92.2L89.4 90.9L92.1 89.7L94.7 88.4L96.1 87.1L98.0 85.8L98.8 84.5L98.8 83.3L97.8 82.0L97.6 80.7L99.6 79.4L99.6 78.1L99.4 76.8L99.0 75.6L100.0 74.3L100.0 73.0L100.0 71.7L100.0 70.4L100.0 69.2L100.0 67.9L100.0 66.6L99.0 65.3L98.4 64.0L96.9 62.8L95.5 61.5L92.3 60.2L91.7 58.9L91.2 57.6L90.8 56.4L91.2 55.1L91.2 53.8L90.8 52.5L89.6 51.2L88.6 50.0L88.0 48.7L85.5 47.4L84.7 46.1L83.1 44.8L82.7 43.5L82.5 42.3L82.1 41.0L81.9 39.7L81.5 38.4L81.5 37.1L81.3 35.9L74.7 34.6L74.5 33.3L72.7 32.0L72.3 30.7L70.7 29.5L70.1 28.2L68.6 26.9L67.0 25.6L65.8 24.3L65.0 23.1L63.5 21.8L62.5 20.5L61.1 19.2L58.7 17.9L57.8 16.7L57.6 15.4L56.2 14.1L53.0 12.8L51.9 11.5L50.3 10.2L47.7 9.0L45.8 7.7L42.6 6.4L40.9 5.1L38.7 3.8L37.5 2.6L37.3 1.3L37.2 0.0Z")
+
 ASSET_LANKA = (
-    '<svg class="lanka" viewBox="0 0 180 300" role="img" '
-    'aria-label="Stylised map of Sri Lanka">'
-    '<path d="M87 8 C111 21 132 43 137 68 C142 91 129 110 137 134 C145 159 137 '
-    '181 151 205 C159 220 154 239 143 253 C130 270 116 287 93 292 C70 297 55 '
-    '281 48 263 C42 248 27 238 27 220 C27 203 39 192 38 174 C37 153 24 138 29 '
-    '118 C34 99 48 91 48 71 C48 51 58 31 70 17 C75 11 80 7 87 8Z" '
-    'fill="#0b67ad" opacity=".42"/>'
-    '<circle cx="91" cy="112" r="4" fill="#1687ff"/>'
-    '<circle cx="73" cy="180" r="4" fill="#1687ff"/>'
-    '<circle cx="115" cy="225" r="4" fill="#1687ff"/></svg>')
+    '<svg class="lanka" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" '
+    'role="img" aria-label="Map of Sri Lanka">'
+    '<path d="' + LANKA_PATH + '" fill="currentColor" opacity=".55"/></svg>')
+
+
+def national_map(markers: str = "") -> str:
+    """The island with resolver markers, or an honest empty overlay.
+
+    A marker is drawn only for a resolver whose configuration carries real
+    coordinates. With none configured the map still renders, and says so --
+    inventing positions would put fabricated infrastructure on a national map.
+    """
+    body = ('<div class="mapwrap"><div class="mapinner">'
+            '<svg class="mapsvg" viewBox="0 0 100 100" '
+            'preserveAspectRatio="xMidYMid meet" role="img" '
+            'aria-label="Monitored resolver locations in Sri Lanka">'
+            '<path d="' + LANKA_PATH + '" class="landmass"/>' + markers
+            + "</svg></div>")
+    if not markers:
+        body += ("<p class='mapnote'>No resolver locations available. Add "
+                 "<code>map_x</code> and <code>map_y</code> (0-100) to a "
+                 "resolver in <code>config/resolvers.yaml</code> to place it.</p>")
+    return body + "</div>"
+
 
 ASSET_EMPTY = (
     '<svg class="emptymark" viewBox="0 0 72 72" width="60" height="60" '
@@ -491,7 +520,7 @@ def _nav(active: str, live: bool, alerts: int = 0) -> str:
     for key, _file, _path, title, _blurb in PAGES:
         cls = "navlink active" if key == active else "navlink"
         count = ('<span class="navcount">' + str(alerts) + "</span>"
-                 if key == "poisoning" and alerts else "")
+                 if key == "anomalies" and alerts else "")
         out += ('<a class="' + cls + '" href="' + link(key, live) + '">'
                 + NAV_ICONS.get(key, "") + "<span>" + e(title) + "</span>"
                 + count + "</a>")
@@ -885,7 +914,21 @@ color:var(--muted)}
 .appbar .r{font-weight:600;color:var(--ink);opacity:.75}
 
 /* sidebar map */
-.lanka{display:block;width:104px;height:auto;margin:0 auto 12px;opacity:.85}
+.lanka{display:block;width:96px;height:auto;margin:0 auto 12px;color:#7fb0e0}
+
+/* national map panel */
+.mapwrap{display:flex;flex-direction:column;align-items:center;gap:10px}
+.mapinner{position:relative;width:100%;max-width:240px}
+.mapsvg{display:block;width:100%;height:auto}
+.mapsvg .landmass{fill:var(--accent);opacity:.22;stroke:var(--accent);
+stroke-width:.6;stroke-opacity:.55}
+.mapsvg .marker{fill:var(--accent);stroke:var(--panel);stroke-width:1.1}
+.mapsvg .marker.bad{fill:var(--bad)}
+.mapsvg .marker.warn{fill:var(--warn)}
+.mapnote{font-size:11.5px;color:var(--muted);text-align:center;margin:0;
+max-width:34ch;line-height:1.55}
+.mapnote code{font-family:ui-monospace,Consolas,monospace;
+background:rgba(127,127,127,.14);padding:1px 5px;border-radius:4px}
 
 /* empty states */
 .emptystate{display:flex;flex-direction:column;align-items:center;
