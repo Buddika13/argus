@@ -182,6 +182,8 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
         body = pages.domains(storage, live, params)
     elif key == "settings":
         body = pages.settings(storage, live)
+    elif key == "help":
+        body = pages.help_page(storage, live)
     elif key == "reports":
         body = pages.reports(storage, live, params)
     else:

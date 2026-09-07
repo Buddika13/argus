@@ -17,7 +17,8 @@ import math
 import time
 
 # key, static filename, server path, title, purpose blurb
-PAGES = (
+# The nine entries in the sidebar, in order.
+NAV_PAGES = (
     ("overview", "report.html", "/", "Dashboard",
      "National view: what is monitored, what it found, and where it looked."),
     ("resolvers", "resolvers.html", "/resolvers", "Resolvers",
@@ -34,14 +35,25 @@ PAGES = (
     ("anomalies", "anomalies.html", "/anomalies", "Alerts",
      "Differences under review by severity, and the legitimate explanations "
      "each was tested against."),
-    ("poisoning", "poisoning.html", "/poisoning", "Cache Poisoning Detection",
-     "Events where a resolver served data no independent source corroborates, "
-     "with the full evidence behind each verdict."),
     ("reports", "reports.html", "/reports", "Reports",
      "Generate PDF and CSV reports from stored monitoring data."),
     ("settings", "settings.html", "/settings", "Settings",
      "The configuration currently in force, and the file that sets each value."),
+    ("help", "help.html", "/help", "Help",
+     "What Argus measures, how the two resolution paths are compared, and how "
+     "to read a verdict."),
 )
+
+# Reachable and generated, but not in the sidebar: the deep evidence view is
+# opened from Alerts and from the Dashboard rather than browsed directly.
+HIDDEN_PAGES = (
+    ("poisoning", "poisoning.html", "/poisoning", "Cache Poisoning Detection",
+     "Events where a resolver served data no independent source corroborates, "
+     "with the full evidence behind each verdict."),
+)
+
+# Every page: what the router, the static export and the tests iterate.
+PAGES = NAV_PAGES + HIDDEN_PAGES
 
 PAGE_BY_KEY = {p[0]: p for p in PAGES}
 
@@ -410,6 +422,9 @@ NAV_ICONS = {
                      '<path d="M9 12h6M9 16h6"/>', 18),
     "domains": _icon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
                      '<path d="M12 3c2.6 3 2.6 15 0 18-2.6-3-2.6-15 0-18z"/>', 18),
+    "help": _icon('<circle cx="12" cy="12" r="9"/>'
+                  '<path d="M9.4 9.2a2.7 2.7 0 1 1 3.3 3.4c-.5.2-.7.6-.7 1.1v.6"/>'
+                  '<path d="M12 17.2h.01"/>', 18),
     "settings": _icon('<circle cx="12" cy="12" r="3.2"/>'
                       '<path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6'
                       'M18.6 5.4 17 7M7 17l-1.6 1.6M18.6 18.6 17 17M7 7 5.4 '
@@ -517,7 +532,7 @@ EYE = ('<svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor" '
 
 def _nav(active: str, live: bool, alerts: int = 0) -> str:
     out = ""
-    for key, _file, _path, title, _blurb in PAGES:
+    for key, _file, _path, title, _blurb in NAV_PAGES:
         cls = "navlink active" if key == active else "navlink"
         count = ('<span class="navcount">' + str(alerts) + "</span>"
                  if key == "anomalies" and alerts else "")

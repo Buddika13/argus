@@ -31,3 +31,6 @@ settings.html
 
 # Generated report files (build output of `argus export` / the Reports page).
 reports/
+
+# Design reference images (kept locally, not in the repository).
+reference/

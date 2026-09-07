@@ -26,7 +26,7 @@ from argus.dashboard.live import render_page
 from argus.storage import Storage
 
 PAGE_KEYS = ("overview", "resolvers", "domains", "poisoning", "queries",
-             "anomalies", "verification", "reports", "settings")
+             "anomalies", "verification", "reports", "settings", "help")
 
 
 class DashboardTests(unittest.TestCase):
@@ -75,13 +75,29 @@ class DashboardTests(unittest.TestCase):
         # The per-measurement table belongs to the DNS Query Monitor page.
         self.assertNotIn("Returned answer", overview)
 
-    def test_navigation_links_every_page(self):
+    def test_navigation_links_every_sidebar_page(self):
+        from argus.dashboard.shell import NAV_PAGES
         db = self._db()
         page = self._page(db, "overview")
         db.close()
-        for _key, filename, _path, title, _blurb in dashboard.PAGES:
+        for _key, filename, _path, title, _blurb in NAV_PAGES:
             self.assertIn(filename, page)
             self.assertIn(title, page)
+
+    def test_hidden_pages_are_still_reachable(self):
+        """Cache Poisoning Detection is off the sidebar, not out of the app.
+
+        It is opened from Alerts and from the Dashboard, so it must still
+        render and still be written by the static export.
+        """
+        from argus.dashboard.shell import HIDDEN_PAGES, NAV_PAGES
+        db = self._db()
+        overview = self._page(db, "overview")
+        for key, filename, _path, _title, _blurb in HIDDEN_PAGES:
+            self.assertNotIn(key, [p[0] for p in NAV_PAGES])
+            self.assertIn(filename, overview)          # linked, not orphaned
+            self.assertTrue(self._page(db, key))       # and still renders
+        db.close()
 
     def test_shows_resolvers_and_findings(self):
         db = self._db()

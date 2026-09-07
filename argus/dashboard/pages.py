@@ -1001,6 +1001,176 @@ def verification(storage, live: bool, params: dict, result=None) -> str:
     return body
 
 
+# -- 9. HELP ---------------------------------------------------------------
+
+def help_page(storage, live: bool) -> str:
+    """Page 9. What Argus measures and how to read what it reports.
+
+    Written against the vocabulary the code actually uses, so a term here can
+    be found in the source. The worked example is drawn from a real stored
+    measurement where one exists, rather than from an invented answer.
+    """
+    body = ("<div class='grid2'>"
+            "<div class='panel'><h3>What Argus is</h3>"
+            "<p class='sub'>Argus watches public caching DNS resolvers. For "
+            "each domain on the watch-list it asks a monitored resolver what "
+            "the answer is, works out the answer independently, and compares "
+            "the two. It is a monitoring system, not a DNS server: it holds no "
+            "cache, answers no queries and has no clients.</p>"
+            "<p class='sub' style='margin-bottom:0'>A caching resolver is the "
+            "server your ISP hands you, which remembers answers for a while so "
+            "it need not ask again. Cache poisoning is an attacker persuading "
+            "that cache to store a wrong answer, so everyone using it is sent "
+            "somewhere else.</p></div>"
+            "<div class='panel'><h3>The two paths</h3>"
+            "<p class='sub'>Every check resolves the same name twice.</p>"
+            "<div class='pathbox untrusted' style='margin-bottom:10px'>"
+            "<h4>Untrusted path &mdash; the monitored cache</h4>"
+            "<code class='cmd'>dig @&lt;resolver-ip&gt; &lt;domain&gt;</code>"
+            "<p class='sub' style='margin:6px 0 0'>What the resolver under "
+            "test claims. Never treated as correct.</p></div>"
+            "<div class='pathbox trusted'>"
+            "<h4>Trusted path &mdash; walked from the root</h4>"
+            "<code class='cmd'>dig +trace &lt;domain&gt;</code>"
+            "<p class='sub' style='margin:6px 0 0'>Root &rarr; TLD &rarr; "
+            "authoritative, followed by Argus itself with no cache in the way. "
+            "This is the reference answer.</p></div></div></div>")
+
+    body += ("<h2>How the comparison is decided</h2>"
+             "<p class='note'>A and AAAA records are compared <b>as sets</b>, "
+             "never first-address-to-first-address. A name legitimately having "
+             "several addresses is normal, and the order they arrive in is "
+             "not meaningful.</p>")
+
+    rows = ""
+    for result, tone, meaning in (
+        ("Match", "ok", "The resolver's address set equals the trusted set."),
+        ("Partial", "warn", "The resolver returned a subset of the trusted "
+                            "addresses. Usually load balancing or a partly "
+                            "filled cache, not an attack."),
+        ("Mismatch", "bad", "The resolver returned an address the zone does "
+                            "not publish. This is the shape poisoning takes, "
+                            "and the only one that can escalate."),
+        ("Not measured", "muted", "One side could not be reached, so no "
+                                  "comparison was possible and no judgement "
+                                  "is made."),
+    ):
+        rows += ("<tr><td>" + badge(result, tone, True) + "</td>"
+                 "<td class='wrap'>" + e(meaning) + "</td></tr>")
+    body += table(["Result", "What it means"], rows, 2)
+
+    body += ("<h2>Before anything is called poisoning</h2>"
+             "<p class='sub' style='max-width:80ch'>A mismatch is where the "
+             "work starts. Six stages run before a verdict is issued, and any "
+             "one of them can explain the difference away.</p>")
+    stages = ""
+    for number, name, what in (
+        (1, "Compare", "The set comparison above. A match or an explained "
+                       "difference stops here."),
+        (2, "Re-walk the hierarchy", "Resolve independently a second time. If "
+                                     "ground truth itself moved between the "
+                                     "two walks, the difference may just be "
+                                     "the zone changing."),
+        (3, "Ask cross-check resolvers",
+            "Query independent public recursives. If they see the same odd "
+            "answer, it is legitimate &mdash; a content-delivery edge or a "
+            "regional record, not one poisoned cache."),
+        (4, "DNSSEC", "If the zone is signed, unpublished data is more "
+                      "suspicious. Supporting evidence only, never proof."),
+        (5, "Persistence", "Re-query several times. An answer that does not "
+                           "reproduce every time is transient, not injected."),
+        (6, "Decide", "Combine the evidence into one classification, stored "
+                      "with the reason."),
+    ):
+        stages += ("<li><b>Stage " + str(number) + " &mdash; " + e(name)
+                   + "</b>" + e(what) + "</li>")
+    body += ("<div class='panel'><ul class='stages'>" + stages + "</ul></div>")
+
+    body += "<h2>The three verdicts</h2><div class='grid2'>"
+    for name, tone, meaning in (
+        (verdict.NO_POISONING, "ok",
+         "The resolver's answer was corroborated, or the difference had a "
+         "legitimate explanation."),
+        (verdict.INCONCLUSIVE, "warn",
+         "Something was seen but the evidence supports neither conclusion. "
+         "Reporting it as clean would hide a real observation; reporting it as "
+         "poisoning would overstate the evidence."),
+        (verdict.POSSIBLE, "bad",
+         "A resolver persistently served addresses that neither the "
+         "authoritative servers nor any independent resolver corroborated. "
+         "Possible, never proven: proof would need the resolver's own cache "
+         "contents or capture of the injection, which a passive observer "
+         "cannot obtain."),
+    ):
+        body += ("<div class='panel'><h3>" + badge(name, tone) + "</h3>"
+                 "<p class='sub' style='margin-bottom:0'>" + e(meaning)
+                 + "</p></div>")
+    body += "</div>"
+
+    body += ("<h2>Legitimate reasons an answer can differ</h2>"
+             "<p class='sub'>Every one of these is tested before a difference "
+             "becomes a finding.</p><div class='grid2'>")
+    for title, text in verdict.BENIGN_EXPLANATIONS:
+        body += ("<div class='panel'><h3>" + e(title) + "</h3>"
+                 "<p class='small muted' style='margin:0'>" + e(text)
+                 + "</p></div>")
+    body += "</div>"
+
+    # A real recorded difference, if the database has one. Never a made-up one.
+    recent = storage.recent_anomalies(1)
+    body += "<h2>A worked example from this database</h2>"
+    if recent:
+        a = recent[0]
+        body += ("<p class='sub'>The most recent difference on record, and the "
+                 "verdict it received.</p>"
+                 "<div class='panel'><dl class='kv'>"
+                 "<dt>Observed</dt><dd>" + ts(a["observed_at"]) + "</dd>"
+                 "<dt>Domain</dt><dd class='mono'>" + e(a["domain"]) + " ("
+                 + e(a["rtype"]) + ")</dd>"
+                 "<dt>Resolver</dt><dd>" + e(a["resolver"]) + "</dd>"
+                 "<dt>Classification</dt><dd>"
+                 + badge(a["classification"], verdict.tone_of(a["classification"]))
+                 + "</dd><dt>Reported verdict</dt><dd>"
+                 + badge(verdict.verdict_of(a["classification"]),
+                         verdict.tone_of(a["classification"]))
+                 + "</dd><dt>Why that verdict</dt><dd>"
+                 + e(verdict.rationale_of(a["classification"])) + "</dd>"
+                 "<dt>Engine's reason</dt><dd>" + e(a["reason"] or "&mdash;")
+                 + "</dd></dl>"
+                 "<p class='sub' style='margin:12px 0 0'>The full evidence for "
+                 "every confirmed event is on the "
+                 "<a href='" + link("poisoning", live) + "'>Cache Poisoning "
+                 "Detection</a> page; everything under review is on "
+                 "<a href='" + link("anomalies", live) + "'>Alerts</a>.</p>"
+                 "</div>")
+    else:
+        body += ("<div class='panel'>" + empty_state(
+            "No difference recorded yet",
+            "When a resolver disagrees with the authoritative hierarchy, the "
+            "example will be filled in from that measurement.") + "</div>")
+
+    body += ("<h2>Running it</h2>"
+             "<div class='panel'><dl class='kv'>"
+             "<dt>One sweep</dt><dd><code>python -m argus run-once</code></dd>"
+             "<dt>Continuous</dt><dd><code>python -m argus serve</code></dd>"
+             "<dt>This dashboard</dt><dd><code>python -m argus dashboard</code>"
+             "</dd>"
+             "<dt>Static copy</dt><dd><code>python -m argus report</code></dd>"
+             "<dt>A PDF report</dt><dd><code>python -m argus export --type "
+             "summary --format pdf</code></dd>"
+             "<dt>Configuration</dt><dd>See the "
+             "<a href='" + link("settings", live) + "'>Settings</a> page for "
+             "every value in force and the file that sets it.</dd>"
+             "</dl></div>")
+
+    body += note("Argus measures from a single vantage point. A domain that "
+                 "legitimately answers differently by region can therefore "
+                 "look like a disagreement, which is why the cross-check stage "
+                 "exists and why content-delivery domains are kept off the "
+                 "watch-list.")
+    return body
+
+
 # -- 7. REPORTS -------------------------------------------------------------
 #
 # Six views behind one navigation entry. Every figure on every one of them is
