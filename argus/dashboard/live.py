@@ -205,11 +205,16 @@ def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
     """An HTTPServer that re-renders the requested page from the database."""
 
     class Handler(BaseHTTPRequestHandler):
-        def _send_file(self, data: bytes, filename: str, mime: str) -> None:
+        def _send_file(self, data: bytes, filename: str, mime: str,
+                       inline: bool = False) -> None:
+            # `inline` is what lets the Reports page embed the very PDF the
+            # download button produces, so the preview cannot drift from the
+            # file: same bytes, same route, only the disposition differs.
             self.send_response(200)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Disposition",
-                             'attachment; filename="%s"' % filename)
+                             '%s; filename="%s"'
+                             % ("inline" if inline else "attachment", filename))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -228,18 +233,25 @@ def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",
                 return
             finally:
                 storage.close()
-            try:
-                # Saved as well as sent, so it appears under Saved reports and
-                # can be fetched again without rebuilding it.
-                saved = reporting.save(report, fmt)
-                data = saved.read_bytes()
-                name = saved.name
-            except OSError:
-                # A read-only checkout must still be able to download.
-                log.warning("could not write to the reports directory", exc_info=True)
-                data = reporting.render(report, fmt)
-                name = report.basename(fmt)
-            self._send_file(data, name, reporting.MIME[fmt])
+            inline = params.get("inline") == "1"
+            if inline:
+                # The embedded preview refreshes with the page. Keeping a copy
+                # of each of those would fill reports/ with a file every few
+                # seconds, so a preview renders without saving; only a real
+                # download is kept.
+                data, name = reporting.render(report, fmt), report.basename(fmt)
+            else:
+                try:
+                    # Saved as well as sent, so it appears under Saved reports
+                    # and can be fetched again without rebuilding it.
+                    saved = reporting.save(report, fmt)
+                    data, name = saved.read_bytes(), saved.name
+                except OSError:
+                    # A read-only checkout must still be able to download.
+                    log.warning("could not write to the reports directory",
+                                exc_info=True)
+                    data, name = reporting.render(report, fmt), report.basename(fmt)
+            self._send_file(data, name, reporting.MIME[fmt], inline=inline)
 
         def _saved_file(self, params: dict) -> None:
             path = reporting.saved_path(params.get("name", ""))

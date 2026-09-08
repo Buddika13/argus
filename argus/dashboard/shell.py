@@ -965,6 +965,16 @@ transition:color .16s ease,border-color .16s ease}
 .tabs a.on{color:var(--accent);border-bottom-color:var(--accent)}
 .tabs a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
+/* panel head with actions, and the embedded PDF preview */
+.panel-head{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-start;
+justify-content:space-between;padding:14px 17px;border-bottom:1px solid var(--line)}
+.panel-head h3{margin:0}
+.panel-head .sub{margin:2px 0 0}
+.panel-actions{display:flex;gap:8px;flex-wrap:wrap}
+.panel-actions .action{padding:7px 12px;font-size:12.5px}
+.pdfview{display:block;width:100%;height:620px;border:0;background:var(--bg)}
+@media(max-width:1120px){.pdfview{height:460px}}
+
 /* report builder */
 .builder{display:block;background:var(--panel);border:1px solid var(--line);
 border-radius:10px;padding:0;margin-bottom:18px;box-shadow:var(--shadow)}

@@ -14,7 +14,8 @@ import json
 
 from .. import reporting
 from . import verdict
-from .shell import (ASSET_LOGO, HEALTHY, ICON_PLAY, ICON_REPORT, KPI_ICONS,
+from .shell import (ASSET_LOGO, HEALTHY, ICON_CLOCK, ICON_PLAY, ICON_REPORT,
+                    KPI_ICONS,
                     NO_DATA, SERIES_COLOURS, STATUS_SEVERITY, badge, bar, donut,
                     e, empty_state, findings, gauge, kpi, linechart, link, ms,
                     national_map, note, pagehead, pct, rate, records,
@@ -297,7 +298,17 @@ def _recent_results(storage, live: bool) -> str:
 
 
 def head(key: str, live: bool) -> str:
-    """A page's title block. Only the Overview replaces the default one."""
+    """A page's title block, where a page wants buttons beside the title."""
+    if key == "reports":
+        return pagehead(
+            "Reports",
+            "Generate and view system reports and analytics, built from "
+            "stored monitoring data.",
+            "<a class='action' href='" + link("reports", live)
+            + "?view=selection#scheduled'>" + ICON_CLOCK
+            + "Scheduled reports</a>"
+            "<a class='action primary' href='" + link("reports", live)
+            + "?view=selection'>" + ICON_REPORT + "Generate report</a>")
     if key != "overview":
         return ""
     return pagehead(
@@ -1319,13 +1330,56 @@ def _saved_reports(live: bool) -> str:
     return body
 
 
+def _preview_pane(storage, live: bool, kind, since, until, flags) -> str:
+    """The report as it will be downloaded, beside the controls that make it.
+
+    In server mode the actual PDF is embedded, so the pager, the zoom and the
+    page count are the browser's own and match the file byte for byte. A saved
+    static copy has no server to fetch it from, so it falls back to rendering
+    the same report as HTML.
+    """
+    header = ("<div class='panel-head'><div><h3>Report preview</h3>"
+              "<p class='sub'>Preview the report before downloading.</p></div>")
+    if not _has_data(storage):
+        return ("<div class='panel'>" + header + "</div>"
+                + _no_data_state(live) + "</div>")
+
+    query = ("?kind=" + kind
+             + ("&amp;since=" + e(since) if since else "")
+             + ("&amp;until=" + e(until) if until else "")
+             + "".join("&amp;options=" + k for k, on in flags.items() if on))
+
+    if live:
+        header += ("<div class='panel-actions'>"
+                   "<a class='action primary' href='" + REPORT_DOWNLOAD + query
+                   + "&amp;format=pdf'>" + ICON_REPORT + "Download PDF</a>"
+                   "<a class='action' href='" + REPORT_DOWNLOAD + query
+                   + "&amp;format=csv'>CSV</a></div></div>")
+        return ("<div class='panel flush'>" + header
+                + "<embed class='pdfview' type='application/pdf' src='"
+                + REPORT_DOWNLOAD + query + "&amp;format=pdf&amp;inline=1'>"
+                "</div>")
+
+    header += ("<span class='muted small'>Start <code>python -m argus "
+               "dashboard</code> to download.</span></div>")
+    report = reporting.build(
+        storage, kind, since=reporting.parse_day(since),
+        until=reporting.parse_day(until, end_of_day=True),
+        vantage=_vantage(storage), options=flags)
+    return ("<div class='panel'>" + header + "</div>"
+            + _paper(storage, report, live))
+
+
 def _selection(storage, live: bool, kind, since, until, fmt, flags) -> str:
     has_data = _has_data(storage)
     body = _report_form(live, kind, since, until, fmt, flags, has_data)
     if not has_data:
-        body += "<div class='panel'>" + _no_data_state(live) + "</div>"
-    body += _saved_reports(live)
-    body += _schedule_panel()
+        return body + "<div class='panel'>" + _no_data_state(live) + "</div>"
+    body += ("<div class='split'><div class='col'>"
+             + _preview_pane(storage, live, kind, since, until, flags)
+             + "</div><div class='col'>"
+             + _saved_reports(live) + _schedule_panel(live)
+             + "</div></div>")
     return body
 
 
@@ -1539,27 +1593,69 @@ def _domain_view(storage, live: bool, params: dict) -> str:
             + "</div>")
 
 
-def _schedule_panel() -> str:
-    """How to produce reports on a schedule.
+def _crontab_entries() -> list:
+    """Argus export lines actually installed in the user's crontab.
 
-    Argus has no scheduler of its own for this, and adding one would duplicate
-    something every operating system already does well, so the page hands over
-    the exact line to install instead of pretending to own it.
+    Read, never written. Argus has no scheduler of its own -- cron already does
+    this well -- so the panel reports what is really scheduled instead of
+    offering a toggle that would have nothing behind it.
     """
-    return ("<div class='panel'><h3>Scheduled reports</h3>"
-            "<p class='sub'>Argus does not run its own report scheduler. On "
-            "Linux, <code>cron</code> produces the same files on any cadence "
-            "&mdash; this line writes a weekly summary every Monday at 06:00, "
-            "into <code>reports/</code>:</p>"
-            # One line, deliberately: a crontab entry cannot be continued
-            # across lines, so a wrapped command would be copied and then fail.
-            "<pre class='cmd'>0 6 * * 1 cd /path/to/argus &amp;&amp; "
-            ".venv/bin/python -m argus export --type summary --format pdf "
-            "--days 7 --no-open</pre>"
-            "<p class='sub' style='margin-bottom:0'>Install it with "
-            "<code>crontab -e</code>. Use <code>--type</code> and "
-            "<code>--days</code> to match any of the report types above.</p>"
-            "</div>")
+    import subprocess
+    try:
+        done = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                              timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []                                  # no cron on this platform
+    if done.returncode != 0:
+        return []                                  # no crontab for this user
+    out = []
+    for line in done.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("#") or "argus" not in line or "export" not in line:
+            continue
+        fields = line.split()
+        if len(fields) < 6:
+            continue
+        schedule = " ".join(fields[:5])
+        kind = ""
+        rest = fields[5:]
+        for i, token in enumerate(rest):
+            if token == "--type" and i + 1 < len(rest):
+                kind = rest[i + 1]
+        out.append({"schedule": schedule,
+                    "kind": reporting.REPORT_TITLES.get(kind, kind or "Report"),
+                    "command": line})
+    return out
+
+
+_CRON_HINT = ("0 6 * * 1 cd %s &amp;&amp; .venv/bin/python -m argus export "
+              "--type summary --format pdf --days 7 --no-open")
+
+
+def _schedule_panel(live: bool) -> str:
+    entries = _crontab_entries()
+    if entries:
+        rows = ""
+        for item in entries:
+            rows += ("<tr><td><b>" + e(item["kind"]) + "</b></td>"
+                     "<td class='mono small'>" + e(item["schedule"]) + "</td>"
+                     "<td>" + badge("installed", "ok", True) + "</td></tr>")
+        body = table(["Report", "Cron schedule", "Status"], rows, 3)
+        body += ("<p class='sub' style='margin:10px 0 0'>Read from "
+                 "<code>crontab -l</code>. Edit with <code>crontab -e</code>; "
+                 "Argus never writes your crontab.</p>")
+    else:
+        from ..config import ROOT
+        body = (empty_state("No scheduled reports",
+                            "Argus has no scheduler of its own -- cron already "
+                            "does this well, so nothing here is simulated.")
+                + "<p class='sub'>Install one with <code>crontab -e</code>. "
+                "This line writes a weekly summary every Monday at 06:00 into "
+                "<code>reports/</code>:</p>"
+                # One line, deliberately: a crontab entry cannot be continued
+                # across lines, so a wrapped command would be copied and fail.
+                + "<pre class='cmd'>" + (_CRON_HINT % e(str(ROOT))) + "</pre>")
+    return ("<div class='panel'><h3>Scheduled reports</h3>" + body + "</div>")
 
 
 def settings(storage, live: bool) -> str:
