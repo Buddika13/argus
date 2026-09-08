@@ -122,6 +122,60 @@ def severity_tone(classification: str) -> str:
     return _SEVERITY.get((classification or "").upper(), ("", "muted"))[1]
 
 
+# The four outcomes the Results page reports. Derived from what the comparison
+# engine stored -- the record sets it computed and whether it could measure at
+# all -- never from the response code alone. NOERROR only says the exchange
+# completed; it says nothing about whether the answer was right.
+MATCH, PARTIAL, MISMATCH, ERROR = "MATCH", "PARTIAL", "MISMATCH", "ERROR"
+
+_OUTCOME_TONE = {MATCH: "ok", PARTIAL: "warn", MISMATCH: "bad", ERROR: "muted"}
+
+# A query that never produced a comparable answer. A timeout is an ERROR, not
+# a MISMATCH: nothing was returned to disagree with.
+_UNMEASURED = {"VERIFICATION_FAILED"}
+_FAILED_RCODES = {"TIMEOUT", "SERVFAIL", "REFUSED", "ERROR", "CONNECTION_ERROR",
+                  "NO_ANSWER"}
+
+
+def outcome_of(classification: str, unpublished: str = "", missing: str = "",
+               rcode: str = "", returned: str = "") -> str:
+    """MATCH / PARTIAL / MISMATCH / ERROR for one stored measurement.
+
+    Uses the sets the engine already computed, so this agrees with the live
+    Monitoring page by construction rather than by coincidence.
+    """
+    classification = (classification or "").upper()
+    if classification in _UNMEASURED or (rcode or "").upper() in _FAILED_RCODES:
+        return ERROR
+    if not classification:
+        return ERROR
+    if (unpublished or "").strip():
+        return MISMATCH
+    if (missing or "").strip():
+        return PARTIAL
+    if classification == "POSSIBLE_CACHE_POISONING":
+        # Recorded before the view carried the sets; the classification alone
+        # is enough to know an unpublished address was seen.
+        return MISMATCH
+    return MATCH
+
+
+def outcome_tone(outcome: str) -> str:
+    return _OUTCOME_TONE.get(outcome, "muted")
+
+
+def outcome_row(row) -> str:
+    """The outcome for a monitoring_events row, tolerating older rows."""
+    def field(name):
+        try:
+            return row[name] or ""
+        except (IndexError, KeyError):
+            return ""
+    return outcome_of(field("comparison_classification"),
+                      field("unpublished_records"), field("missing_records"),
+                      field("rcode"), field("returned_records"))
+
+
 def verdict_of(classification: str) -> str:
     """The reported verdict for a stored classification."""
     return _MAP.get((classification or "").upper(), (INCONCLUSIVE, "muted", ""))[0]

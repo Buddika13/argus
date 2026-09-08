@@ -206,6 +206,9 @@ CREATE VIEW IF NOT EXISTS monitoring_events AS
         a.chain                    AS delegation_chain,
         a.tld                      AS tld,
         c.classification           AS comparison_classification,
+        c.matched                  AS matched_records,
+        c.unpublished              AS unpublished_records,
+        c.missing                  AS missing_records,
         c.reason                   AS verification_result,
         c.is_anomaly               AS anomaly_status
     FROM query_results q

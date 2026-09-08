@@ -94,6 +94,45 @@ def records(value) -> str:
     return "<span class='mono'>" + e(value) + "</span>"
 
 
+# A filled circle carrying a glyph, drawn rather than typed: an emoji would
+# render differently on every platform and would not take the row's colour.
+_PILL_MARK = {
+    "ok": '<path d="m4.6 8.2 2.2 2.2 4.6-5" />',
+    "bad": '<path d="M5 5l6 6M11 5l-6 6" />',
+    "warn": '<path d="M8 4.4v5.2" /><path d="M8 12h.01" />',
+    "muted": '<path d="M4.8 8h6.4" />',
+}
+
+
+def status_pill(text: str, tone: str = "muted") -> str:
+    """A compact status: a coloured disc with a white glyph, then the word."""
+    mark = _PILL_MARK.get(tone, _PILL_MARK["muted"])
+    return ('<span class="pill ' + tone + '">'
+            '<svg class="pillmark" viewBox="0 0 16 16" aria-hidden="true">'
+            '<circle cx="8" cy="8" r="8"/>'
+            '<g fill="none" stroke="#fff" stroke-width="2" '
+            'stroke-linecap="round" stroke-linejoin="round">' + mark + "</g>"
+            "</svg><b>" + e(text) + "</b></span>")
+
+
+def duration(ms) -> str:
+    """A measured response time, at a scale that keeps its information.
+
+    DNS answers arrive in tens of milliseconds, so rounding to whole seconds
+    would print "0m 00s" against every healthy row and hide the difference
+    between a 20 ms resolver and a 400 ms one. Sub-second times are therefore
+    shown in milliseconds, as the reference design does; a query slow enough to
+    pass a second is shown as minutes and seconds, where that reads better.
+    The stored value is untouched either way.
+    """
+    if not isinstance(ms, (int, float)):
+        return "&mdash;"
+    if ms < 1000:
+        return "%d ms" % int(round(ms))
+    total = int(round(ms / 1000.0))
+    return "%dm %02ds" % (total // 60, total % 60)
+
+
 def badge(text: str, tone: str = "muted", small: bool = False) -> str:
     cls = "badge " + tone + (" tiny" if small else "")
     return '<span class="' + cls + '">' + e(text) + "</span>"
@@ -661,7 +700,8 @@ font-style:italic}
 line-height:1.6;margin-top:12px}
 
 /* main column */
-.main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.main{flex:1 1 auto;min-width:0;max-width:100%;display:flex;
+flex-direction:column}
 .topbar{background:var(--panel);border-bottom:1px solid var(--line);
 padding:12px 26px;position:sticky;top:0;z-index:2;display:flex;
 flex-wrap:wrap;gap:14px 24px;align-items:center;justify-content:space-between}
@@ -674,7 +714,8 @@ font-size:11.5px;line-height:1.45}
 .topbar .stamp svg{flex:none;opacity:.7}
 .topbar .stamp b{display:block;color:var(--ink);font-size:13px;font-weight:600;
 font-variant-numeric:tabular-nums}
-.content{padding:24px 26px 40px;max-width:1280px;flex:1 1 auto}
+.content{padding:24px 26px 40px;max-width:1280px;width:100%;
+box-sizing:border-box;min-width:0;flex:1 1 auto}
 
 /* page head */
 .pagehead{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:flex-start;
@@ -870,17 +911,23 @@ font-size:11.5px;line-height:1.6;white-space:pre}
 
 /* tables */
 .tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);
-border-radius:10px;box-shadow:var(--shadow);margin-bottom:6px}
-table{width:100%;border-collapse:collapse;font-size:13px}
+border-radius:10px;box-shadow:var(--shadow);margin-bottom:6px;max-width:100%;
+box-sizing:border-box}
+table{width:100%;border-collapse:collapse;font-size:13px;
+table-layout:auto;box-sizing:border-box}
 th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);
-white-space:nowrap;vertical-align:middle}
+vertical-align:middle}
+/* Cells wrap by default and only the ones that must stay on one line opt out,
+   so a long detail column can no longer widen the table past its container. */
+td,th{white-space:normal}
+td.nowrap,th.nowrap,td.num,td.mono{white-space:nowrap}
 th{color:var(--muted);font-weight:650;text-transform:uppercase;font-size:10px;
 letter-spacing:.08em;background:rgba(127,127,127,.05)}
 tbody tr:last-child td{border-bottom:none}
 tbody tr{transition:background .14s ease}
 tbody tr:hover td{background:rgba(127,127,127,.05)}
 tr.dim td{opacity:.55}
-td.wrap{white-space:normal;max-width:460px;line-height:1.5}
+td.wrap{white-space:normal;max-width:340px;min-width:150px;line-height:1.5}
 
 /* badges + chips */
 .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:10.5px;
@@ -991,6 +1038,21 @@ transition:color .16s ease,border-color .16s ease}
 .tabs a:hover{color:var(--ink)}
 .tabs a.on{color:var(--accent);border-bottom-color:var(--accent)}
 .tabs a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* compact status pill: coloured disc, glyph, word */
+.pill{display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 4px;
+border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.02em;
+line-height:1.5;white-space:nowrap;vertical-align:middle}
+.pill .pillmark{width:16px;height:16px;flex:none;display:block}
+.pill b{font-weight:700}
+.pill.ok{background:var(--okbg);color:var(--ok)}
+.pill.ok .pillmark circle{fill:var(--ok)}
+.pill.bad{background:var(--badbg);color:var(--bad)}
+.pill.bad .pillmark circle{fill:var(--bad)}
+.pill.warn{background:var(--warnbg);color:var(--warn)}
+.pill.warn .pillmark circle{fill:var(--warn)}
+.pill.muted{background:var(--greybg);color:var(--grey)}
+.pill.muted .pillmark circle{fill:var(--grey)}
 
 /* Monitoring / Domain Check */
 .checkbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));

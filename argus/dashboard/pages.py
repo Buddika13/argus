@@ -16,7 +16,8 @@ from .. import reporting
 from . import verdict
 from .shell import (ASSET_LOGO, HEALTHY, ICON_CLOCK, ICON_PLAY, ICON_REPORT,
                     KPI_ICONS,
-                    LANKA_ASPECT, NO_DATA, SERIES_COLOURS,
+                    LANKA_ASPECT, NO_DATA, SERIES_COLOURS, duration,
+                    status_pill,
                     STATUS_SEVERITY, badge, bar, donut,
                     e, empty_state, findings, gauge, kpi, linechart, link, ms,
                     national_map, note, pagehead, pct, rate, records,
@@ -808,16 +809,31 @@ def queries(storage, live: bool, params: dict) -> str:
 
     rowsout = ""
     for r in rows:
-        cls = r["comparison_classification"]
-        rowsout += ("<tr><td class='small muted'>" + ts(r["timestamp"]) + "</td>"
-                    "<td><b>" + e(r["resolver"]) + "</b></td>"
-                    "<td>" + e(r["domain"]) + "</td>"
-                    "<td><span class='chip'>" + e(r["query_type"]) + "</span></td>"
-                    "<td class='mono small'>" + e(r["rcode"]) + "</td>"
-                    "<td>" + records(r["returned_records"]) + "</td>"
-                    "<td>" + badge(cls or "—", verdict.tone_of(cls), True) + "</td></tr>")
-    body += table(["When", "Resolver", "Domain", "Type", "RCODE", "Returned answer",
-                   "Classification"], rowsout, 7)
+        # The outcome is derived from the record sets the comparison engine
+        # stored, not from the response code: NOERROR only means the exchange
+        # completed, and a timeout is an ERROR rather than a disagreement.
+        outcome = verdict.outcome_row(r)
+        detail = (r["verification_result"] or "").strip()
+        if len(detail) > 58:
+            detail = detail[:55].rstrip() + "..."
+        view = link("verification", live, "?domain=" + e(r["domain"] or "")
+                    + "&amp;rtype=" + e(r["query_type"] or "A")
+                    + "&amp;resolver=" + e(r["resolver"] or ""))
+        rowsout += ("<tr><td class='small muted nowrap'>" + ts(r["timestamp"])
+                    + "</td>"
+                    "<td><b>" + e(r["domain"]) + "</b> <span class='chip'>"
+                    + e(r["query_type"]) + "</span></td>"
+                    "<td>" + e(r["resolver"]) + "</td>"
+                    "<td>" + status_pill(outcome, verdict.outcome_tone(outcome))
+                    + "</td>"
+                    "<td class='num nowrap'>" + duration(r["response_time_ms"])
+                    + "</td>"
+                    "<td class='wrap small muted'>" + (e(detail) or "&mdash;")
+                    + "</td>"
+                    "<td class='nowrap'><a class='btn' href='" + view
+                    + "'>View</a></td></tr>")
+    body += table(["Time", "Domain", "Resolver", "Result", "Response time",
+                   "Details", "Actions"], rowsout, 7)
 
     keep = ""
     for k, v in (("q", search), ("resolver", resolver), ("domain", domain),
