@@ -652,7 +652,7 @@ font-weight:700;min-width:19px;height:19px;border-radius:999px;padding:0 6px;
 display:inline-flex;align-items:center;justify-content:center}
 /* The quote block follows the navigation instead of being pinned to the
    bottom of a tall viewport, which left a wide empty band between them. */
-.railfoot{margin:26px 14px 0;padding:20px 6px 0;
+.railfoot{margin:22px 14px 0;padding:18px 6px 0;
 border-top:1px solid rgba(255,255,255,.09)}
 .railspacer{flex:1 1 auto;min-height:8px}
 .railfoot .quote{color:#fff;opacity:.9;font-size:13px;line-height:1.5;
@@ -946,13 +946,20 @@ color:var(--muted)}
 .appbar .r{font-weight:600;color:var(--ink);opacity:.75}
 
 /* sidebar map */
-.lanka{display:block;width:76px;height:auto;margin:0 auto 14px;color:#7fb0e0}
+.lanka{display:block;width:100%;max-width:150px;height:auto;
+margin:0 auto 16px;color:#7fb0e0}
+/* The island is half as wide as it is tall, so 150px of width costs 300px of
+   height. On a short screen that pushes the quote out of the rail, so it
+   steps down rather than forcing the column to scroll. */
+@media(max-height:900px){.lanka{max-width:118px}}
+@media(max-height:780px){.lanka{max-width:88px}}
 .lanka .island{fill:currentColor;opacity:.5}
 
 /* national map panel */
 .mapwrap{display:flex;flex-direction:column;align-items:center;gap:10px}
-.mapinner{position:relative;width:100%;max-width:240px}
-.mapsvg{display:block;width:100%;height:auto}
+.mapinner{position:relative;display:flex;justify-content:center;width:100%}
+.mapsvg{display:block;width:auto;height:auto;max-height:320px;
+max-width:100%}
 .mapsvg .landmass{fill:var(--accent);opacity:.22;stroke:var(--accent);
 stroke-width:.6;stroke-opacity:.55}
 .mapsvg .marker{fill:var(--accent);stroke:var(--panel);stroke-width:1.1}
