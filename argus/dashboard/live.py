@@ -13,6 +13,7 @@ does not implement any DNS logic of its own.
 from __future__ import annotations
 
 import logging
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -127,14 +128,37 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
             "agrees": bool(answer.records) and answer.records == truth.records,
         }
 
+    # The match type the Monitoring page reports, derived from the comparison
+    # the engine already made -- never recomputed from the records here, so the
+    # page cannot disagree with what a sweep would have stored.
+    if not direct.ok or not truth.ok:
+        match_type = "ERROR"
+    elif result.unpublished:
+        match_type = "MISMATCH"
+    elif result.missing:
+        match_type = "PARTIAL"
+    else:
+        match_type = "MATCH"
+
     return {
         "resolver": target.name, "resolver_ip": target.address,
+        "resolver_role": target.role, "resolver_isp": target.isp,
         "domain": domain, "rtype": rtype,
         "direct": sorted(direct.records), "rcode": direct.rcode,
         "latency": direct.latency_ms, "ttl": direct.min_ttl,
+        "direct_ok": direct.ok, "direct_error": direct.error,
         "authoritative": sorted(truth.records), "auth_rcode": truth.rcode,
+        "auth_ttl": truth.ttl, "auth_ok": truth.ok, "auth_error": truth.error,
         "chain": list(truth.chain), "auth_servers": list(truth.authoritative_servers),
         "controls": control_results,
+        "matched": sorted(result.matched),
+        "unpublished": sorted(result.unpublished),
+        "missing": sorted(result.missing),
+        "ttl_ratio": result.ttl_ratio, "ttl_inflated": result.ttl_inflated,
+        "match_type": match_type,
+        "severity": verdict.severity_of(classification.value) or "None",
+        "severity_tone": verdict.severity_tone(classification.value),
+        "checked_at": time.time(),
         "stage1": result.classification.value,
         "classification": classification.value,
         "reason": reason,
@@ -203,7 +227,7 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
     except Exception:                                  # noqa: BLE001
         alerts = 0
     return page(key, vantage, body, live=live, refresh_seconds=refresh,
-                scope=_scope(), alerts=alerts, head=pages.head(key, live))
+                scope=_scope(), alerts=alerts, head=pages.head(key, live, params))
 
 
 def build_server(db_path, vantage: str = "local", host: str = "127.0.0.1",

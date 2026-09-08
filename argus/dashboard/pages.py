@@ -301,8 +301,16 @@ def _recent_results(storage, live: bool) -> str:
                  rowsout, 6)
 
 
-def head(key: str, live: bool) -> str:
+def head(key: str, live: bool, params: dict | None = None) -> str:
     """A page's title block, where a page wants buttons beside the title."""
+    params = params or {}
+    if key == "verification":
+        domain = (params.get("domain") or "").strip()
+        return pagehead(
+            ("Domain check: " + e(domain)) if domain else "Monitoring",
+            "Compare the answer from the monitored caching resolver (the "
+            "untrusted path) with the trusted path walked from the root "
+            "(dig +trace).")
     if key == "reports":
         return pagehead(
             "Reports",
@@ -904,116 +912,307 @@ def anomalies(storage, live: bool, selected_id: str = "") -> str:
 
 # -- 6. INDEPENDENT VERIFICATION --------------------------------------------
 
+MATCH_TONES = {"MATCH": "ok", "PARTIAL": "warn", "MISMATCH": "bad",
+               "ERROR": "muted"}
+MATCH_WORDS = {"MATCH": "Match", "PARTIAL": "Partial match",
+               "MISMATCH": "Mismatch", "ERROR": "Error"}
+
+
+def _answer_block(domain: str, rtype: str, records, ttl, highlight=()) -> str:
+    """The answer section, laid out the way dig prints one.
+
+    Argus resolves with dnspython rather than shelling out, so this is the
+    measured answer formatted as dig would format it -- the same records, the
+    same TTL, rendered in the familiar shape. Only one TTL is stored per
+    answer (the smallest), so every row carries it.
+    """
+    if not records:
+        return ("<div class='digline muted'>;; no records in the answer "
+                "section</div>")
+    out = ""
+    for value in records:
+        odd = " unexpected" if value in highlight else ""
+        out += ("<div class='digline" + odd + "'>"
+                "<span class='dn'>" + e(domain) + ".</span>"
+                "<span class='dt'>" + (str(ttl) if ttl is not None else "-")
+                + "</span><span class='dc'>IN</span>"
+                "<span class='dr'>" + e(rtype) + "</span>"
+                "<span class='dv'>" + e(value) + "</span>"
+                + ("<span class='dx'>&larr; unexpected</span>" if odd else "")
+                + "</div>")
+    return out
+
+
+def _path_card(side: str, title: str, blurb: str, command: str,
+               body: str, footer: str = "") -> str:
+    return ("<div class='pathcard " + side + "'>"
+            "<div class='pathhead'><span class='dot'></span>"
+            "<div><b>" + e(title) + "</b><span>" + e(blurb) + "</span></div></div>"
+            "<div class='digbox'><div class='digcmd'>$ " + e(command) + "</div>"
+            + body + "</div>"
+            + ("<p class='pathfoot'>" + footer + "</p>" if footer else "")
+            + "</div>")
+
+
+def _ipset(title: str, records, note: str, highlight=()) -> str:
+    rows = ""
+    for value in records:
+        odd = " class='unexpected'" if value in highlight else ""
+        rows += "<div" + odd + ">" + e(value) + "</div>"
+    if not records:
+        rows = "<div class='muted'>(none)</div>"
+    return ("<div class='ipset'><h4>" + e(title) + "</h4>"
+            "<div class='ips'>" + rows + "</div>"
+            "<p class='sub'>" + note + "</p></div>")
+
+
+def _check_history(storage, live: bool, domain: str, resolver: str) -> str:
+    """Previous stored checks for this pair, from the monitoring record."""
+    rows = storage.search_events(limit=10, domain=domain, resolver=resolver)
+    if not rows:
+        return ("<div class='panel'><h3>Check history</h3>"
+                + empty_state("No previous checks stored",
+                              "This page runs a live check; sweeps record "
+                              "history. Run  python -m argus run-once  to "
+                              "build one.") + "</div>")
+    body = ""
+    for r in rows:
+        cls = r["comparison_classification"]
+        body += ("<tr><td class='small muted'>" + ts(r["timestamp"]) + "</td>"
+                 "<td><span class='chip'>" + e(r["query_type"]) + "</span></td>"
+                 "<td class='mono small'>" + e(r["rcode"]) + "</td>"
+                 "<td>" + records(r["returned_records"]) + "</td>"
+                 "<td>" + badge(verdict.short_of(cls), verdict.tone_of(cls), True)
+                 + "</td></tr>")
+    return ("<div class='panel flush'><h3>Check history &mdash; " + e(domain)
+            + " on " + e(resolver) + "</h3>"
+            + table(["When", "Type", "RCODE", "Answer", "Result"], body, 5)
+            + "<div class='foot'><a href='" + link("queries", live, "?domain="
+            + e(domain) + "&amp;resolver=" + e(resolver))
+            + "'>View all measurements &rarr;</a></div></div>")
+
+
+def _domain_check(storage, live: bool, result, params: dict) -> str:
+    """The Domain Check view: two paths, the comparison, and the evidence."""
+    domain, rtype = result["domain"], result["rtype"]
+    resolver, resolver_ip = result["resolver"], result["resolver_ip"]
+    match = result["match_type"]
+    tone = MATCH_TONES.get(match, "muted")
+    unexpected = set(result["unpublished"])
+
+    # -- top information card --------------------------------------------
+    head = ("<div class='checkbar'>"
+            "<div><span>Domain</span><b>" + e(domain) + " <span class='chip'>"
+            + e(rtype) + "</span></b></div>"
+            "<div><span>Resolver (untrusted path)</span><b>" + e(resolver)
+            + " <i>(" + e(resolver_ip) + ")</i></b></div>"
+            "<div><span>Check time</span><b>" + ts(result["checked_at"])
+            + "</b></div>"
+            "<div><span>Status</span><b>"
+            + badge(MATCH_WORDS.get(match, match), tone) + "</b></div>"
+            "<div><span>Severity</span><b>"
+            + badge(result["severity"], result["severity_tone"]) + "</b></div>"
+            "</div>")
+
+    # -- the two resolution paths ----------------------------------------
+    untrusted_cmd = ("dig @%s %s %s +noall +answer"
+                     % (resolver_ip, domain, rtype))
+    trusted_cmd = "dig +trace %s %s" % (domain, rtype)
+
+    if result["direct_ok"]:
+        left_body = _answer_block(domain, rtype, result["direct"],
+                                  result["ttl"], unexpected)
+        left_foot = ("Response code <b>" + e(result["rcode"]) + "</b> &middot; "
+                     + ms(result["latency"]) + " &middot; TTL "
+                     + (str(result["ttl"]) if result["ttl"] is not None else "&mdash;"))
+    else:
+        left_body = ("<div class='digline bad'>;; " + e(result["direct_error"]
+                     or "the resolver did not answer") + "</div>")
+        left_foot = "The monitored resolver could not be measured."
+
+    if result["auth_ok"]:
+        right_body = _answer_block(domain, rtype, result["authoritative"],
+                                   result["auth_ttl"])
+        right_foot = ("Walked " + e(" &rarr; ".join(result["chain"]) or "direct")
+                      + " &middot; answered by "
+                      + e(", ".join(result["auth_servers"]) or "&mdash;"))
+    else:
+        right_body = ("<div class='digline bad'>;; " + e(result["auth_error"]
+                      or "the hierarchy could not be walked") + "</div>")
+        right_foot = "Ground truth could not be established for this name."
+
+    body = head + ("<div class='paths two'>"
+            + _path_card("untrusted", "Untrusted path (direct query to the "
+                         "caching server)",
+                         "Query the monitored resolver directly. Never trusted.",
+                         untrusted_cmd, left_body, left_foot)
+            + _path_card("trusted", "Trusted path (dig +trace)",
+                         "Walk the hierarchy: root → TLD → authoritative.",
+                         trusted_cmd, right_body, right_foot)
+            + "</div>"
+            "<p class='note'>Argus resolves with dnspython rather than calling "
+            "<code>dig</code>, so the commands above are the standard-tool "
+            "equivalent and the answers beneath them are the measured records "
+            "printed the way dig prints them. <code>dig +trace</code> fetches "
+            "out-of-bailiwick glue through the local system resolver, whereas "
+            "the trusted path sub-walks from the root for it.</p>")
+
+    # -- comparison result ------------------------------------------------
+    verdict_note = {
+        "MATCH": "The resolver returned exactly the published answer set.",
+        "PARTIAL": "The resolver returned a subset of the published answer. "
+                   "Commonly load balancing or a partly filled cache.",
+        "MISMATCH": "The resolver returned an address the zone does not "
+                    "publish. This is the shape poisoning takes.",
+        "ERROR": "One side could not be measured, so no comparison was "
+                 "possible.",
+    }[match]
+
+    body += ("<h2>Comparison result</h2><div class='compare'>"
+             + _ipset("Untrusted IP set", result["direct"],
+                      "As returned by <b>" + e(resolver) + "</b>.", unexpected)
+             + "<div class='verdictbox " + tone + "'>"
+             "<span class='vlabel'>Result</span>"
+             "<b class='vword'>" + e(MATCH_WORDS.get(match, match)) + "</b>"
+             "<span class='vnote'>" + e(verdict_note) + "</span></div>"
+             + _ipset("Trusted IP set", result["authoritative"],
+                      "As walked from the root.")
+             + "</div>")
+
+    if unexpected:
+        body += note(
+            "<b>Potential DNS anomaly.</b> " + e(", ".join(sorted(unexpected)))
+            + " appeared in the resolver's answer but not in the trusted "
+            "answer. Argus reports this as <b>" + e(result["verdict"])
+            + "</b> &mdash; " + e(verdict.rationale_of(result["classification"]))
+            + ". A single mismatch is not proof of cache poisoning; the "
+            "verification engine's classification is the authority.", "warn")
+
+    # -- details -----------------------------------------------------------
+    ratio = result["ttl_ratio"]
+    body += ("<h2>Details</h2><div class='panel'><dl class='kv wide'>"
+             "<dt>TTL (resolver)</dt><dd class='mono'>"
+             + (str(result["ttl"]) + " s" if result["ttl"] is not None else "&mdash;")
+             + "</dd>"
+             "<dt>TTL (authoritative)</dt><dd class='mono'>"
+             + (str(result["auth_ttl"]) + " s" if result["auth_ttl"] is not None
+                else "&mdash;") + "</dd>"
+             "<dt>TTL ratio</dt><dd class='mono'>"
+             + (("%.2f" % ratio) if isinstance(ratio, float) else "&mdash;")
+             + (" <b class='bad'>inflated</b>" if result["ttl_inflated"] else "")
+             + "</dd>"
+             "<dt>Response time</dt><dd class='mono'>" + ms(result["latency"])
+             + "</dd>"
+             "<dt>Response code (resolver / authoritative)</dt><dd class='mono'>"
+             + e(result["rcode"]) + " / " + e(result["auth_rcode"]) + "</dd>"
+             "<dt>Addresses returned</dt><dd class='mono'>"
+             + str(len(result["direct"])) + " from the resolver, "
+             + str(len(result["authoritative"])) + " from the trusted path</dd>"
+             "<dt>Also matched</dt><dd class='mono'>"
+             + (e(", ".join(result["matched"])) or "&mdash;") + "</dd>"
+             "<dt>Missing from the resolver</dt><dd class='mono'>"
+             + (e(", ".join(result["missing"])) or "&mdash;") + "</dd>"
+             "<dt>Not published by the zone</dt><dd class='mono badink'>"
+             + (e(", ".join(result["unpublished"])) or "&mdash;") + "</dd>"
+             "<dt>Match type</dt><dd>" + badge(MATCH_WORDS.get(match, match),
+                                               tone, True) + "</dd>"
+             "<dt>Stage 1 classification</dt><dd class='mono'>"
+             + e(result["stage1"]) + "</dd>"
+             "<dt>Final classification</dt><dd>"
+             + badge(result["classification"],
+                     verdict.tone_of(result["classification"])) + "</dd>"
+             "<dt>Reported verdict</dt><dd>"
+             + badge(result["verdict"],
+                     verdict.verdict_tone(result["verdict"])) + "</dd>"
+             "<dt>Evidence</dt><dd class='wrap'>" + e(result["reason"]) + "</dd>"
+             "<dt>Checked at</dt><dd class='mono'>" + ts(result["checked_at"])
+             + "</dd></dl></div>")
+
+    # -- cross-check resolvers --------------------------------------------
+    rowsout = ""
+    for name, info in result["controls"].items():
+        rowsout += ("<tr><td><b>" + e(name) + "</b></td>"
+                    "<td class='mono'>" + e(info["ip"]) + "</td>"
+                    "<td class='mono'>" + e(", ".join(info["records"]) or "(none)")
+                    + "</td><td>" + badge("agrees with authoritative"
+                                          if info["agrees"] else "differs",
+                                          "ok" if info["agrees"] else "warn",
+                                          True) + "</td></tr>")
+    body += ("<h2>Cross-check resolvers</h2>"
+             + table(["Resolver", "IP", "Answer", "Agreement"], rowsout, 4)
+             + "<p class='small muted'>Independent public recursives, asked the "
+             "same question. They corroborate only &mdash; ground truth is the "
+             "trusted path above.</p>")
+
+    if (params.get("history") or "").strip():
+        body += _check_history(storage, live, domain, resolver)
+    return body
+
+
 def verification(storage, live: bool, params: dict, result=None) -> str:
+    """Monitoring / Domain Check.
+
+    The form and the live check are unchanged -- the same probe, the same
+    authoritative walk and the same comparison a sweep performs. Only the
+    presentation is new: the two resolution paths side by side, the comparison
+    between them, and the evidence beneath.
+    """
     # The choices come from the configuration, not from the database. The
     # resolvers table keeps every name ever recorded, so offering those would
     # list resolvers that are no longer configured and cannot be queried.
     from ..config import load_settings
     try:
-        configured = load_settings().resolvers
+        settings = load_settings()
+        configured, watchlist = settings.resolvers, settings.watchlist
     except Exception:                                  # noqa: BLE001
-        configured = []
+        configured, watchlist = [], []
     resolver_names = [r.name for r in configured] or         [r["name"] for r in storage.list_resolvers()]
     chosen = (params.get("resolver") or "").strip()
     domain = (params.get("domain") or "").strip()
     rtype = (params.get("rtype") or "A").strip().upper()
 
-    body = note("This page performs a live check. It queries the selected resolver, "
-                "the independent cross-check resolvers, and the authoritative servers for the "
-                "zone &mdash; walking Root &rarr; TLD &rarr; authoritative itself &mdash; "
-                "then compares the three.")
-
-    body += ("<form class='filters' method='get' action='"
-             + link("verification", live) + "'>"
-             "<div class='field'><label for='domain'>Domain</label>"
-             "<input id='domain' name='domain' value='" + e(domain)
-             + "' placeholder='peoplesbank.lk' required></div>"
-             + _choose("rtype", "Record type", ["A", "AAAA"], rtype or "A")
-             + _choose("resolver", "Monitored resolver", resolver_names,
-                       chosen or (resolver_names[0] if resolver_names else ""))
-             + "<button type='submit'>Run verification</button></form>")
+    form = ("<form class='filters' method='get' action='"
+            + link("verification", live) + "'>"
+            "<div class='field grow'><label for='domain'>Domain</label>"
+            "<input id='domain' name='domain' value='" + e(domain)
+            + "' list='watchlist' placeholder='"
+            + e(watchlist[0] if watchlist else "example.lk")
+            + "' required></div>"
+            "<datalist id='watchlist'>"
+            + "".join("<option value='" + e(d) + "'>" for d in watchlist)
+            + "</datalist>"
+            + _choose("rtype", "Record type", ["A", "AAAA"], rtype or "A")
+            + _choose("resolver", "Monitored resolver", resolver_names,
+                      chosen or (resolver_names[0] if resolver_names else ""))
+            + "<button type='submit'>" + ICON_PLAY + "Run new check</button>"
+            + ("<button type='submit' name='history' value='1' "
+               "class='secondary'>Check history</button>" if domain and chosen
+               else "")
+            + "<a class='btn' href='" + link("queries", live)
+            + "'>Back to results</a></form>")
 
     if not live:
-        body += note("Live verification needs the built-in server. Start it with "
-                     "<code>python -m argus dashboard</code>, or run the same check "
-                     "from the terminal with "
-                     "<code>python scripts/demo_workflow.py &lt;domain&gt; &lt;resolver-ip&gt;</code>.",
-                     "warn")
-        return body
+        return (form + note(
+            "Live verification needs the built-in server. Start it with "
+            "<code>python -m argus dashboard</code>, or run the same check from "
+            "the terminal with <code>python scripts/demo_workflow.py "
+            "&lt;domain&gt; &lt;resolver-ip&gt;</code>.", "warn"))
 
     if result is None:
-        body += note("Choose a domain and a resolver, then select "
-                     "<b>Run verification</b>.")
-        return body
+        return (form + "<div class='panel'>" + empty_state(
+            "No check run yet",
+            "Choose a domain and a resolver, then select Run new check. This "
+            "page queries the resolver directly and walks the hierarchy itself; "
+            "nothing is shown until both have answered.") + "</div>")
+
     if "error" in result:
-        body += note(e(result["error"]), "warn")
-        return body
+        return (form + "<div class='panel'><div class='errorcard'>"
+                "<b>The check could not be completed</b>"
+                "<p>" + e(result["error"]) + "</p>"
+                "<span class='sub'>Nothing was recorded. Correct the selection "
+                "above and run the check again.</span></div></div>")
 
-    body += "<h2>Monitored result</h2>"
-    body += ("<div class='panel'><dl class='kv'>"
-             "<dt>Resolver</dt><dd><b>" + e(result["resolver"]) + "</b> "
-             "<span class='mono'>" + e(result["resolver_ip"]) + "</span></dd>"
-             "<dt>Query</dt><dd>" + e(result["domain"]) + " "
-             + e(result["rtype"]) + "</dd>"
-             "<dt>Answer</dt><dd class='mono'>"
-             + e(", ".join(result["direct"]) or "(none)") + "</dd>"
-             "<dt>Response code</dt><dd class='mono'>" + e(result["rcode"]) + "</dd>"
-             "<dt>Latency</dt><dd>" + ms(result["latency"]) + "</dd>"
-             "<dt>TTL</dt><dd>" + e(result["ttl"] if result["ttl"] is not None else "—")
-             + "</dd></dl></div>")
-
-    body += "<h2>Cross-check resolver results</h2>"
-    rowsout = ""
-    for name, info in result["controls"].items():
-        agree = "ok" if info["agrees"] else "warn"
-        rowsout += ("<tr><td><b>" + e(name) + "</b></td>"
-                    "<td class='mono'>" + e(info["ip"]) + "</td>"
-                    "<td class='mono'>" + e(", ".join(info["records"]) or "(none)")
-                    + "</td><td>" + badge("agrees with authoritative" if info["agrees"]
-                                          else "differs", agree, True) + "</td></tr>")
-    body += table(["Resolver", "IP", "Answer", "Agreement"], rowsout, 4)
-    body += ("<p class='small muted'>These are public recursive resolvers, "
-             "used only to corroborate. Ground truth is the authoritative "
-             "result below, walked Root &rarr; TLD &rarr; authoritative; a "
-             "cross-check resolver agreeing or differing never decides the "
-             "verdict on its own.</p>")
-
-    body += "<h2>Authoritative result</h2>"
-    body += ("<div class='panel'><dl class='kv'>"
-             "<dt>Answer</dt><dd class='mono'>"
-             + e(", ".join(result["authoritative"]) or "(none)") + "</dd>"
-             "<dt>Response code</dt><dd class='mono'>"
-             + e(result["auth_rcode"]) + "</dd>"
-             "<dt>Delegation walked</dt><dd class='mono small'>"
-             + e(" | ".join(result["chain"]) or "(direct)") + "</dd>"
-             "<dt>Servers asked</dt><dd class='mono small'>"
-             + e(", ".join(result["auth_servers"]) or "—") + "</dd></dl></div>")
-
-    body += "<h2>Comparison result</h2>"
-    body += ("<div class='panel'><dl class='kv'>"
-             "<dt>Stage 1 classification</dt><dd>"
-             + badge(result["stage1"], verdict.tone_of(result["stage1"])) + "</dd>"
-             "<dt>Final classification</dt><dd>"
-             + badge(result["classification"],
-                     verdict.tone_of(result["classification"])) + "</dd>"
-             "<dt>Reason</dt><dd>" + e(result["reason"]) + "</dd></dl></div>")
-
-    body += dig_commands(result["domain"], result["rtype"], result["resolver_ip"])
-
-    final = result["verdict"]
-    tone = verdict.verdict_tone(final)
-    explain = {
-        verdict.NO_POISONING: "The monitored resolver agrees with the cross-check "
-                              "resolvers and the authoritative servers.",
-        verdict.POSSIBLE: "The monitored resolver differs from the independent "
-                          "sources consistently. Possible &mdash; not proven.",
-        verdict.INCONCLUSIVE: "The sources disagree in a way that cannot be "
-                              "confidently classified.",
-    }[final]
-    body += ('<div class="verdict ' + tone + '" style="margin-top:18px">'
-             '<span class="dot"></span><div><b>' + final + "</b><span>"
-             + explain + "</span></div></div>")
-    return body
+    return form + _domain_check(storage, live, result, params)
 
 
 # -- 9. HELP ---------------------------------------------------------------
