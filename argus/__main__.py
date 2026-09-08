@@ -33,6 +33,7 @@ Terminology used throughout the codebase and the documentation:
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import sys
 import time
@@ -416,12 +417,52 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Serve the dashboard.
+
+    The socket is bound before anything is announced, so a failure to start is
+    never preceded by a line claiming the dashboard is up. A busy port is the
+    single most common failure, and it is nearly always a dashboard the
+    operator forgot was running -- which then keeps serving the code it was
+    started with, so a `git pull` appears to have done nothing.
+    """
     from . import dashboard
     settings = load_settings()
+
+    try:
+        httpd = dashboard.build_server(settings.db_path, settings.vantage,
+                                       args.host, args.port, args.refresh)
+    except OSError as exc:
+        if exc.errno == errno.EACCES:
+            print(f"Port {args.port} needs privileges this user does not have.")
+            print("Ports below 1024 are reserved for root. Try a higher one:")
+            print()
+            print("    python -m argus dashboard --port 8080")
+            return 1
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        print(f"Port {args.port} is already in use.")
+        print()
+        print("Another dashboard is almost certainly still running, and it goes")
+        print("on serving the code it was started with -- so recent changes do")
+        print("not appear until it is stopped. Stop it with:")
+        print()
+        print('    pkill -f "argus dashboard"')
+        print()
+        print("or leave it alone and run this one beside it:")
+        print()
+        print(f"    python -m argus dashboard --port {args.port + 1}")
+        return 1
+
     url = f"http://{args.host}:{args.port}"
     print(f"Live dashboard at {url} (auto-refresh {args.refresh}s). Press Ctrl+C to stop.")
     print("It reads the database on every request, so it shows real-time monitoring data.")
-    dashboard.serve(settings.db_path, settings.vantage, args.host, args.port, args.refresh)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print()
+        print("Stopped.")
+    finally:
+        httpd.server_close()
     return 0
 
 
