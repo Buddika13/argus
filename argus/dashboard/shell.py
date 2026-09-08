@@ -756,10 +756,10 @@ line-height:1.15}
 .kpi.muted .n{color:var(--muted)}
 
 /* two-column dashboard split */
-.split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+.split{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(296px,1fr);
 gap:16px;align-items:start}
 .col{display:flex;flex-direction:column;gap:16px;min-width:0}
-@media(max-width:1120px){.split{grid-template-columns:1fr}}
+@media(max-width:880px){.split{grid-template-columns:1fr}}
 
 /* cards / panels */
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:12px;
@@ -778,6 +778,8 @@ padding:15px 17px;box-shadow:var(--shadow)}
 .panel.flush{padding:0;overflow:hidden}
 .panel.flush h3{padding:14px 17px 11px;margin:0;border-bottom:1px solid var(--line)}
 .panel.flush .tablewrap{border:none;border-radius:0;box-shadow:none;margin:0}
+.panel.flush.compact .tablewrap{max-height:274px;overflow:auto}
+.panel.compact .emptystate{padding:20px 12px}
 .panel .foot{padding:11px 17px;border-top:1px solid var(--line);text-align:right}
 .panel .foot a{font-size:12.5px;font-weight:600;text-decoration:none}
 .panel .foot a:hover{text-decoration:underline}
@@ -1079,14 +1081,18 @@ justify-content:space-between;padding:14px 17px;border-bottom:1px solid var(--li
 .panel-head .sub{margin:2px 0 0}
 .panel-actions{display:flex;gap:8px;flex-wrap:wrap}
 .panel-actions .action{padding:7px 12px;font-size:12.5px}
-.pdfview{display:block;width:100%;height:620px;border:0;background:var(--bg)}
-@media(max-width:1120px){.pdfview{height:460px}}
+/* Sized from the viewport, not a fixed block: a PDF has no intrinsic
+   height, so a hard 620px reserved the same space on a 768px-tall laptop as
+   on a 1440p screen and pushed everything beside it out of view. */
+.pdfview{display:block;width:100%;height:clamp(320px,56vh,640px);
+min-height:0;border:0;background:var(--bg)}
 
 /* report builder */
 .builder{display:block;background:var(--panel);border:1px solid var(--line);
 border-radius:10px;padding:0;margin-bottom:18px;box-shadow:var(--shadow)}
 .builder .steps{display:grid;
-grid-template-columns:repeat(auto-fit,minmax(226px,1fr));gap:0}
+grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0;
+align-items:start}
 .builder .step{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
 .builder .step:last-child{border-right:none}
 .builder h4{margin:0 0 10px;font-size:12px;font-weight:700;color:var(--ink);
@@ -1102,6 +1108,11 @@ cursor:pointer;line-height:1.4}
 margin-top:1px}
 .builder .hint{font-size:11px;color:var(--muted);margin:8px 0 0}
 .builder-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+.builder .footer{display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--line);
+background:rgba(127,127,127,.03)}
+.builder .footer .builder-actions{margin:0}
+.builder .footer .hint{margin:0;margin-right:auto;max-width:52ch}
 .builder .field{margin-bottom:8px}
 button.primary{background:var(--accent);border-color:var(--accent)}
 

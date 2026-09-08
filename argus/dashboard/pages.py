@@ -1540,15 +1540,18 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
             "<input id='until' name='until' type='date' value='" + e(until)
             + "'></div>"
             "<p class='hint'>Leave both empty for every measurement on "
-            "record.</p>"
-            "<h4 class='next'>3. Select format</h4>"
+            "record.</p></div>"
+            "<div class='step'><h4>3. Select format</h4>"
             "<div class='choices'>" + formats + "</div>"
             "<p class='hint'>Excel is a real .xlsx workbook with one sheet "
             "per section; CSV is a single flat file.</p></div>"
             "<div class='step'><h4>4. Options</h4>"
-            "<div class='choices'>" + options + "</div>"
+            "<div class='choices'>" + options + "</div></div>"
+            "</div>"
+            "<div class='footer'><p class='hint'>Options apply to the file "
+            "you download as well as the preview.</p>"
             "<div class='builder-actions'>" + actions + "</div></div>"
-            "</div></form>")
+            "</form>")
 
 
 def _saved_reports(live: bool) -> str:
@@ -1559,20 +1562,19 @@ def _saved_reports(live: bool) -> str:
                 else "%d B" % item["size"])
         name = ("<a href='" + href + "'>" + e(item["name"]) + "</a>"
                 if live else e(item["name"]))
-        rows += ("<tr><td>" + name + "</td>"
+        rows += ("<tr><td>" + name + "<div class='small muted'>" + size
+                 + "</div></td>"
                  "<td class='small'>" + e(item["kind"]) + "</td>"
                  "<td><span class='chip'>" + e(item["format"]) + "</span></td>"
-                 "<td class='small muted'>" + ts(item["modified"]) + "</td>"
-                 "<td class='small muted'>" + size + "</td>"
-                 "<td>" + badge("Completed", "ok", True) + "</td></tr>")
+                 "<td class='small muted'>" + ts(item["modified"]) + "</td></tr>")
     if not rows:
-        return ("<div class='panel'><h3>Recent reports</h3>"
+        return ("<div class='panel compact'><h3>Recent reports</h3>"
                 + empty_state("No reports generated yet",
                               "Generated files are listed here and kept in the "
                               "reports/ folder.") + "</div>")
-    body = ("<div class='panel flush'><h3>Recent reports</h3>"
-            + table(["File", "Report", "Format", "Generated", "Size", "Status"],
-                    rows, 6) + "</div>")
+    body = ("<div class='panel flush compact'><h3>Recent reports</h3>"
+            + table(["File", "Report", "Format", "Generated"], rows, 4)
+            + "</div>")
     if not live:
         body += note("Open the files directly from the <code>reports/</code> "
                      "folder, or start <code>python -m argus dashboard</code> "
@@ -1906,7 +1908,8 @@ def _schedule_panel(live: bool) -> str:
                 # One line, deliberately: a crontab entry cannot be continued
                 # across lines, so a wrapped command would be copied and fail.
                 + "<pre class='cmd'>" + (_CRON_HINT % e(str(ROOT))) + "</pre>")
-    return ("<div class='panel'><h3>Scheduled reports</h3>" + body + "</div>")
+    return ("<div class='panel compact'><h3>Scheduled reports</h3>" + body
+            + "</div>")
 
 
 def settings(storage, live: bool) -> str:
