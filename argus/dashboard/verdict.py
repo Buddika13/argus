@@ -122,6 +122,17 @@ def severity_tone(classification: str) -> str:
     return _SEVERITY.get((classification or "").upper(), ("", "muted"))[1]
 
 
+def classifications_for_severity(level: str) -> list:
+    """Which stored classifications a severity covers.
+
+    Severity is a label over the classification, not a column, so filtering by
+    it has to become a filter over the classifications it stands for --
+    otherwise the count and the page disagree.
+    """
+    level = (level or "").strip().title()
+    return sorted(k for k, (name, _tone) in _SEVERITY.items() if name == level)
+
+
 # The four outcomes the Results page reports. Derived from what the comparison
 # engine stored -- the record sets it computed and whether it could measure at
 # all -- never from the response code alone. NOERROR only says the exchange
@@ -174,6 +185,57 @@ def outcome_row(row) -> str:
     return outcome_of(field("comparison_classification"),
                       field("unpublished_records"), field("missing_records"),
                       field("rcode"), field("returned_records"))
+
+
+# What kind of finding this is, in words. Read out of the reason the engine
+# itself wrote, so the label always describes what was actually detected; the
+# classification is the fallback when the reason says nothing specific. No new
+# detection happens here -- this only names what is already stored.
+_TYPE_HINTS = (
+    ("inflation", "TTL inflation"),
+    ("exceeds authoritative ttl", "TTL inflation"),
+    ("returned no records", "Missing records"),
+    ("no records", "Missing records"),
+    ("does not publish", "Unexpected IP detected"),
+    ("unpublished", "Unexpected IP detected"),
+    ("nxdomain", "Answer for a name the zone denies"),
+    ("response-code", "Response code difference"),
+    ("rcode", "Response code difference"),
+    ("could not be measured", "Verification incomplete"),
+    ("could not be run", "Verification incomplete"),
+    ("not consistently reproduced", "Transient difference"),
+    ("cache churn", "Transient difference"),
+)
+
+_TYPE_BY_CLASS = {
+    "POSSIBLE_CACHE_POISONING": "Unexpected IP detected",
+    "DNS_INTEGRITY_ANOMALY": "Persistent irregularity",
+    "TEMPORARY_ANOMALY": "Transient difference",
+    "VERIFICATION_FAILED": "Verification incomplete",
+    "BENIGN_DIFFERENCE": "Explained difference",
+    "ANOMALY": "Difference under review",
+    "NORMAL": "No difference",
+}
+
+
+def alert_type_of(classification: str, reason: str = "") -> str:
+    """A short name for what was detected, taken from the stored evidence."""
+    text = (reason or "").lower()
+    for hint, label in _TYPE_HINTS:
+        if hint in text:
+            return label
+    return _TYPE_BY_CLASS.get((classification or "").upper(),
+                              "Difference under review")
+
+
+# How far a finding has got through verification. These are the engine's own
+# states; they are not renamed here, because a report and the database must
+# use the same words.
+_STATE_TONE = {"CONFIRMED": "bad", "PENDING": "warn", "CLEARED": "ok"}
+
+
+def state_tone(state: str) -> str:
+    return _STATE_TONE.get((state or "").upper(), "muted")
 
 
 def verdict_of(classification: str) -> str:

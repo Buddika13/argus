@@ -1039,6 +1039,15 @@ transition:color .16s ease,border-color .16s ease}
 .tabs a.on{color:var(--accent);border-bottom-color:var(--accent)}
 .tabs a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
+/* a small coloured disc with a word beside it: severity and status */
+.dotstate{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;
+font-weight:600;white-space:nowrap}
+.dotstate .statusdot{width:8px;height:8px;margin:0;vertical-align:0}
+.dotstate.ok{color:var(--ok)}
+.dotstate.warn{color:var(--warn)}
+.dotstate.bad{color:var(--bad)}
+.dotstate.muted{color:var(--grey)}
+
 /* compact status pill: coloured disc, glyph, word */
 .pill{display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 4px;
 border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.02em;

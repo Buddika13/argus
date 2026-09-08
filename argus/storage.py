@@ -582,6 +582,66 @@ class Storage:
             " ORDER BY observed_at DESC LIMIT ?",
             (domain, resolver, limit)).fetchall()
 
+    # -- anomalies, filtered and paged (the Alerts page) ------------------
+
+    @staticmethod
+    def _anomaly_filters(resolver: str = "", domain: str = "",
+                         classification: str = "", state: str = "",
+                         classifications=None, since: float = 0.0,
+                         until: float = 0.0, search: str = "") -> tuple[str, list]:
+        """A WHERE clause over anomalies. Empty filters are ignored.
+
+        Severity is not a stored column -- it is a presentation ranking of the
+        classification -- so the page filters by classification and the label
+        is derived from it, keeping one source of truth.
+        """
+        clauses, params = [], []
+        for column, value in (("resolver", resolver), ("domain", domain),
+                              ("classification", classification),
+                              ("verification_state", state)):
+            if value:
+                clauses.append(column + " = ?")
+                params.append(value)
+        if classifications:
+            clauses.append("classification IN (%s)"
+                           % ",".join("?" for _ in classifications))
+            params.extend(classifications)
+        if since:
+            clauses.append("observed_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("observed_at <= ?")
+            params.append(until)
+        if search:
+            clauses.append("(domain LIKE ? OR resolver LIKE ? OR reason LIKE ?)")
+            like = "%" + search + "%"
+            params.extend([like, like, like])
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else "", params)
+
+    def search_anomalies(self, limit: int = 25, offset: int = 0,
+                         **filters) -> list[sqlite3.Row]:
+        where, params = self._anomaly_filters(**filters)
+        return self._conn.execute(
+            "SELECT * FROM anomalies" + where +
+            " ORDER BY observed_at DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+
+    def count_anomalies(self, **filters) -> int:
+        where, params = self._anomaly_filters(**filters)
+        return self._conn.execute(
+            "SELECT count(*) FROM anomalies" + where, params).fetchone()[0]
+
+    def distinct_anomalies_column(self, column: str) -> list[str]:
+        """Distinct values of one anomalies column, for the filter menus."""
+        allowed = {"resolver", "domain", "classification", "verification_state"}
+        if column not in allowed:
+            raise ValueError("column not allowed: " + column)
+        rows = self._conn.execute(
+            "SELECT DISTINCT " + column + " FROM anomalies"
+            " WHERE " + column + " IS NOT NULL AND " + column + " <> ''"
+            " ORDER BY " + column).fetchall()
+        return [r[0] for r in rows]
+
     def anomaly_by_id(self, anomaly_id: int) -> Optional[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM anomalies WHERE id = ?", (anomaly_id,)).fetchone()

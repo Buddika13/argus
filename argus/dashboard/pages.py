@@ -853,76 +853,280 @@ def queries(storage, live: bool, params: dict) -> str:
     return body
 
 
-# -- 5. ANOMALY INVESTIGATION -----------------------------------------------
+# -- 5. ALERTS ---------------------------------------------------------------
+#
+# Findings the detection engine recorded, filtered and paged. Severity and
+# alert type are derived from what the engine stored -- its classification and
+# its own reason text -- so nothing is re-decided here and the words on this
+# page can be traced back to a row.
 
-def anomalies(storage, live: bool, selected_id: str = "") -> str:
-    body = note("A difference between a resolver and the authoritative answer is "
-                "an observation, not a finding. Each one below was tested against "
-                "the legitimate explanations listed at the foot of this page before "
-                "any verdict was assigned.")
+ALERTS_PAGE_SIZE = 10
 
-    rowsout = ""
-    for a in storage.recent_anomalies(50):
-        cls = a["classification"]
-        href = link("anomalies", live, "?id=" + str(a["id"]))
-        rowsout += ("<tr><td class='small muted'>" + ts(a["observed_at"]) + "</td>"
-                    "<td><b>" + e(a["resolver"]) + "</b></td>"
-                    "<td>" + e(a["domain"]) + "</td>"
-                    "<td><span class='chip'>" + e(a["rtype"]) + "</span></td>"
-                    "<td>" + badge(cls, verdict.tone_of(cls), True) + "</td>"
-                    "<td>" + badge(verdict.verdict_of(cls), verdict.tone_of(cls), True)
-                    + "</td>"
-                    "<td class='small'>" + e(a["verification_state"]) + "</td>"
-                    "<td><a class='btn' href='" + href + "'>Evidence</a></td></tr>")
-    body += table(["When", "Resolver", "Domain", "Type", "Classification",
-                   "Verdict", "State", ""], rowsout, 8)
 
-    if selected_id:
+def _dot_status(state: str) -> str:
+    """A small coloured disc and the engine's own state word."""
+    tone = verdict.state_tone(state)
+    return ("<span class='dotstate " + tone + "'>"
+            "<span class='statusdot'></span>"
+            + e((state or "unknown").title()) + "</span>")
+
+
+def _severity_cell(classification: str) -> str:
+    level = verdict.severity_of(classification)
+    if not level:
+        return "<span class='muted small'>&mdash;</span>"
+    return ("<span class='dotstate " + verdict.severity_tone(classification)
+            + "'><span class='statusdot'></span>" + e(level) + "</span>")
+
+
+def _alert_filters(storage, live: bool, params: dict) -> str:
+    """Filter menus built from the values actually present in the database."""
+    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
+    severities = ["High", "Medium", "Low"]
+    return ("<form class='filters' method='get' action='"
+            + link("anomalies", live) + "'>"
+            + _select("severity", "Severity", severities, get("severity"))
+            + _select("resolver", "Resolver",
+                      storage.distinct_anomalies_column("resolver"),
+                      get("resolver"))
+            + _select("state", "Status",
+                      storage.distinct_anomalies_column("verification_state"),
+                      get("state"))
+            + _select("classification", "Alert type",
+                      storage.distinct_anomalies_column("classification"),
+                      get("classification"))
+            + "<div class='field grow'><label for='q'>Search</label>"
+            "<input id='q' name='q' value='" + e(get("q"))
+            + "' placeholder='domain, resolver or reason'></div>"
+            "<button type='submit'>Apply</button>"
+            "<a class='btn' href='" + link("anomalies", live) + "'>Reset</a>"
+            "</form>")
+
+
+def _alert_detail(storage, live: bool, row) -> str:
+    """Everything stored about one finding, including the evidence chain."""
+    ev = _evidence(row["checks"])
+    cls = row["classification"]
+    stage1 = ev.get("stage1") or {}
+    stage2 = ev.get("stage2_authoritative") or {}
+    stage3 = ev.get("stage3_controls") or {}
+
+    # The measurement this finding came from, for the answers and timings.
+    event = next(iter(storage.search_events(
+        limit=1, resolver=row["resolver"], domain=row["domain"],
+        rtype=row["rtype"])), None)
+
+    resolver_ip = ""
+    for r in storage.list_resolvers():
+        if r["name"] == row["resolver"]:
+            resolver_ip = r["address"]
+            break
+
+    body = ("<h2>Alert #" + e(row["id"]) + " &mdash; "
+            + e(verdict.alert_type_of(cls, row["reason"])) + "</h2>"
+            "<div class='panel'><dl class='kv wide'>"
+            "<dt>Alert ID</dt><dd class='mono'>" + e(row["id"]) + "</dd>"
+            "<dt>Observed</dt><dd class='mono'>" + ts(row["observed_at"]) + "</dd>"
+            "<dt>Severity</dt><dd>" + _severity_cell(cls) + "</dd>"
+            "<dt>Alert type</dt><dd>"
+            + e(verdict.alert_type_of(cls, row["reason"])) + "</dd>"
+            "<dt>Domain</dt><dd class='mono'>" + e(row["domain"])
+            + " <span class='chip'>" + e(row["rtype"]) + "</span></dd>"
+            "<dt>Resolver</dt><dd><b>" + e(row["resolver"]) + "</b>"
+            + (" <span class='mono muted'>" + e(resolver_ip) + "</span>"
+               if resolver_ip else "") + "</dd>"
+            "<dt>Status</dt><dd>" + _dot_status(row["verification_state"])
+            + "</dd>"
+            "<dt>Classification</dt><dd>"
+            + badge(cls, verdict.tone_of(cls)) + "</dd>"
+            "<dt>Reported verdict</dt><dd>"
+            + badge(verdict.verdict_of(cls), verdict.tone_of(cls)) + "</dd>"
+            "<dt>Why that verdict</dt><dd class='wrap'>"
+            + e(verdict.rationale_of(cls)) + "</dd>"
+            "<dt>Detection reason</dt><dd class='wrap'>"
+            + e(row["reason"] or "&mdash;") + "</dd>")
+
+    if event is not None:
+        body += ("<dt>Response code</dt><dd class='mono'>"
+                 + e(event["rcode"] or "&mdash;") + "</dd>"
+                 "<dt>Response time</dt><dd class='mono'>"
+                 + duration(event["response_time_ms"]) + "</dd>"
+                 "<dt>TTL</dt><dd class='mono'>"
+                 + (str(event["ttl"]) + " s" if event["ttl"] is not None
+                    else "&mdash;") + "</dd>")
+    body += "</dl></div>"
+
+    # The two answers, side by side, from the stored measurement.
+    untrusted = (event["returned_records"] if event is not None else "") or ""
+    trusted = ", ".join(stage2.get("records") or []) or (
+        (event["authoritative_records"] if event is not None else "") or "")
+    unexpected = set(stage1.get("unpublished") or [])
+
+    def lines(text):
+        values = [v.strip() for v in str(text).split(",") if v.strip()]
+        if not values:
+            return "<div class='digline muted'>;; no records</div>"
+        return "".join("<div class='digline"
+                       + (" unexpected" if v in unexpected else "") + "'>"
+                       "<span class='dv'>" + e(v) + "</span>"
+                       + ("<span class='dx'>&larr; not in the trusted answer"
+                          "</span>" if v in unexpected else "") + "</div>"
+                       for v in values)
+
+    body += ("<h2>Monitoring evidence</h2><div class='paths two'>"
+             "<div class='pathcard untrusted'>"
+             "<div class='pathhead'><span class='dot'></span><div>"
+             "<b>Untrusted path</b><span>What the monitored resolver "
+             "answered.</span></div></div>"
+             "<div class='digbox'><div class='digcmd'>$ dig @"
+             + e(resolver_ip or "&lt;resolver&gt;") + " " + e(row["domain"])
+             + " " + e(row["rtype"]) + "</div>" + lines(untrusted) + "</div>"
+             "<p class='pathfoot'>Recorded at " + ts(row["observed_at"])
+             + ".</p></div>"
+             "<div class='pathcard trusted'>"
+             "<div class='pathhead'><span class='dot'></span><div>"
+             "<b>Trusted path</b><span>Walked root &rarr; TLD &rarr; "
+             "authoritative.</span></div></div>"
+             "<div class='digbox'><div class='digcmd'>$ dig +trace "
+             + e(row["domain"]) + " " + e(row["rtype"]) + "</div>"
+             + lines(trusted) + "</div>"
+             "<p class='pathfoot'>Ground truth for this comparison.</p></div>"
+             "</div>")
+
+    answers = stage3.get("answers") or {}
+    if answers:
+        rows = ""
+        for name, recs in sorted(answers.items()):
+            rows += ("<tr><td><b>" + e(name) + "</b></td>"
+                     "<td class='mono'>" + e(", ".join(recs) or "(none)")
+                     + "</td></tr>")
+        body += ("<h2>Cross-check resolvers at the time</h2>"
+                 + table(["Resolver", "Answer"], rows, 2)
+                 + "<p class='small muted'>"
+                 + ("At least one independent resolver returned the same "
+                    "unexpected data, which argues against poisoning."
+                    if stage3.get("corroborates_unexpected")
+                    else "No independent resolver returned the unexpected "
+                         "data.") + "</p>")
+
+    if ev:
+        stages = ""
+        for name in ("stage1", "stage2_authoritative", "stage3_controls",
+                     "stage4_dnssec", "stage5_persistence"):
+            if name not in ev:
+                continue
+            stages += ("<li><b>" + e(name.replace("_", " ")) + "</b>"
+                       "<span class='mono small'>" + e(json.dumps(ev[name]))
+                       + "</span></li>")
+        if stages:
+            body += ("<h2>Recorded checks</h2><div class='panel'>"
+                     "<ul class='stages'>" + stages + "</ul></div>")
+
+    body += ("<p class='small muted' style='margin-top:14px'>"
+             "<a class='btn' href='" + link("anomalies", live)
+             + "'>&larr; Back to alerts</a></p>")
+    return body
+
+
+def anomalies(storage, live: bool, params: dict) -> str:
+    get = lambda k: (params.get(k) or "").strip()          # noqa: E731
+
+    selected = get("id")
+    if selected:
         try:
-            row = storage.anomaly_by_id(int(selected_id))
+            row = storage.anomaly_by_id(int(selected))
         except (TypeError, ValueError):
             row = None
         if row is None:
-            body += note("No anomaly with that identifier is stored.", "warn")
-        else:
-            ev = _evidence(row["checks"])
-            cls = row["classification"]
-            body += "<h2>Evidence &mdash; anomaly #" + e(row["id"]) + "</h2>"
-            body += ("<div class='panel'><dl class='kv'>"
-                     "<dt>Observed</dt><dd>" + ts(row["observed_at"]) + "</dd>"
-                     "<dt>Resolver</dt><dd><b>" + e(row["resolver"]) + "</b></dd>"
-                     "<dt>Domain</dt><dd>" + e(row["domain"]) + " ("
-                     + e(row["rtype"]) + ")</dd>"
-                     "<dt>Classification</dt><dd>"
-                     + badge(cls, verdict.tone_of(cls)) + "</dd>"
-                     "<dt>Reported verdict</dt><dd>"
-                     + badge(verdict.verdict_of(cls), verdict.tone_of(cls)) + "</dd>"
-                     "<dt>Why</dt><dd>" + e(verdict.rationale_of(cls)) + "</dd>"
-                     "<dt>State</dt><dd>" + e(row["verification_state"]) + "</dd>"
-                     "<dt>Reason</dt><dd>" + e(row["reason"] or "—") + "</dd>"
-                     "</dl></div>")
-            if ev:
-                stages = ""
-                for name in ("stage1", "stage2_authoritative", "stage3_controls",
-                             "stage4_dnssec", "stage5_persistence"):
-                    if name not in ev:
-                        continue
-                    stages += ("<li><b>" + e(name.replace("_", " ")) + "</b>"
-                               "<span class='mono small'>"
-                               + e(json.dumps(ev[name])) + "</span></li>")
-                body += ("<div class='panel' style='margin-top:14px'>"
-                         "<h3>Recorded checks</h3><ul class='stages'>" + stages
-                         + "</ul></div>")
+            return ("<div class='panel'>" + empty_state(
+                "No alert with that identifier",
+                "It may have been recorded on another vantage point.")
+                + "</div>")
+        return _alert_detail(storage, live, row)
 
-    body += "<h2>Legitimate explanations tested</h2><div class='grid2'>"
+    filters = {"resolver": get("resolver"), "state": get("state"),
+               "classification": get("classification"), "search": get("q")}
+    # Severity stands for a set of classifications, so it is filtered in the
+    # query. Trimming the page afterwards would have made the count disagree
+    # with the rows and hidden matches that sat on a later page.
+    severity = get("severity")
+    if severity:
+        filters["classifications"] = verdict.classifications_for_severity(severity)
+    total = storage.count_anomalies(**filters)
+
+    try:
+        page_no = max(1, int(get("page") or 1))
+    except ValueError:
+        page_no = 1
+    pages = max(1, (total + ALERTS_PAGE_SIZE - 1) // ALERTS_PAGE_SIZE)
+    page_no = min(page_no, pages)
+    rows = storage.search_anomalies(limit=ALERTS_PAGE_SIZE,
+                                    offset=(page_no - 1) * ALERTS_PAGE_SIZE,
+                                    **filters)
+
+    body = _alert_filters(storage, live, params)
+
+    if not storage.count_anomalies():
+        return body + "<div class='panel'>" + empty_state(
+            "No alerts",
+            "No difference between a monitored resolver and the authoritative "
+            "hierarchy has been recorded yet. Alerts appear here when a sweep "
+            "or a live check finds one.") + "</div>"
+
+    listing = ""
+    for a in rows:
+        cls = a["classification"]
+        href = link("anomalies", live, "?id=" + str(a["id"]))
+        listing += ("<tr><td class='small muted nowrap'>"
+                    + ts(a["observed_at"]) + "</td>"
+                    "<td class='nowrap'>" + _severity_cell(cls) + "</td>"
+                    "<td>" + e(verdict.alert_type_of(cls, a["reason"])) + "</td>"
+                    "<td><b>" + e(a["domain"]) + "</b> <span class='chip'>"
+                    + e(a["rtype"]) + "</span></td>"
+                    "<td>" + e(a["resolver"]) + "</td>"
+                    "<td class='nowrap'>" + _dot_status(a["verification_state"])
+                    + "</td>"
+                    "<td class='nowrap'><a class='btn' href='" + href
+                    + "'>View</a></td></tr>")
+
+    if not listing:
+        body += ("<div class='panel'>" + empty_state(
+            "No alerts match these filters",
+            "Clear the filters to see every recorded finding.") + "</div>")
+        return body
+
+    body += table(["Time", "Severity", "Alert type", "Domain", "Resolver",
+                   "Status", "Actions"], listing, 7)
+
+    keep = ""
+    for key in ("severity", "resolver", "state", "classification", "q"):
+        if get(key):
+            keep += "&amp;" + key + "=" + e(get(key))
+    first = (page_no - 1) * ALERTS_PAGE_SIZE + 1
+    last = min(total, page_no * ALERTS_PAGE_SIZE)
+    prev_cls = "btn" if page_no > 1 else "btn off"
+    next_cls = "btn" if page_no < pages else "btn off"
+    body += ("<div class='pager'>"
+             "<a class='" + prev_cls + "' href='" + link("anomalies", live)
+             + "?page=" + str(page_no - 1) + keep + "'>&larr; Previous</a>"
+             "<a class='" + next_cls + "' href='" + link("anomalies", live)
+             + "?page=" + str(page_no + 1) + keep + "'>Next &rarr;</a>"
+             "<span>Showing " + str(first) + "&ndash;" + str(last) + " of "
+             + "{:,}".format(total) + " alert"
+             + ("" if total == 1 else "s") + " &middot; page " + str(page_no)
+             + " of " + str(pages) + "</span></div>")
+
+    body += ("<h2>Legitimate explanations tested</h2><div class='grid2'>")
     for title, text in verdict.BENIGN_EXPLANATIONS:
         body += ("<div class='panel'><h3>" + e(title) + "</h3>"
-                 "<p class='small muted' style='margin:0'>" + e(text) + "</p></div>")
+                 "<p class='small muted' style='margin:0'>" + e(text)
+                 + "</p></div>")
     body += "</div>"
-    body += note("Only when every one of these is ruled out &mdash; the answer is "
-                 "absent from the authoritative servers, no cross-check resolver "
-                 "corroborates it, and it persists across repeated queries &mdash; "
-                 "is <b>" + verdict.POSSIBLE + "</b> reported.")
+    body += note("A difference is an observation, not a finding. Only when "
+                 "every explanation above is ruled out &mdash; the answer is "
+                 "absent from the authoritative servers, no cross-check "
+                 "resolver corroborates it, and it persists across repeated "
+                 "queries &mdash; is <b>" + verdict.POSSIBLE + "</b> reported.")
     return body
 
 

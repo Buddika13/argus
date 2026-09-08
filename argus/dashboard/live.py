@@ -235,7 +235,7 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
     elif key == "queries":
         body = pages.queries(storage, live, params)
     elif key == "anomalies":
-        body = pages.anomalies(storage, live, (params.get("id") or "").strip())
+        body = pages.anomalies(storage, live, params)
     elif key == "verification":
         result = None
         if live and (params.get("domain") or "").strip():
