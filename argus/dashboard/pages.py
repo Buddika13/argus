@@ -1257,9 +1257,8 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
     """
     types = "".join(_radio("kind", key, title, kind, blurb)
                     for key, title, blurb in reporting.REPORT_TYPES)
-    formats = "".join(
-        _radio("format", key, label, fmt) for key, label in
-        (("pdf", "PDF"), ("csv", "CSV (opens in Excel)")))
+    formats = "".join(_radio("format", key, reporting.FORMAT_LABELS[key], fmt)
+                      for key in reporting.FORMATS)
     options = "".join(_checkbox("options", key, label, flags.get(key, False))
                       for key, label in reporting.OPTIONS)
 
@@ -1279,6 +1278,7 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
     return ("<form class='builder' method='get' action='"
             + link("reports", live) + "'>"
             "<input type='hidden' name='view' value='preview'>"
+            "<input type='hidden' name='opts' value='1'>"
             "<div class='steps'>"
             "<div class='step'><h4>1. Select report type</h4>"
             "<div class='choices'>" + types + "</div></div>"
@@ -1293,8 +1293,8 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
             "record.</p>"
             "<h4 class='next'>3. Select format</h4>"
             "<div class='choices'>" + formats + "</div>"
-            "<p class='hint'>CSV carries a byte-order mark, so Excel opens it "
-            "with the columns already split.</p></div>"
+            "<p class='hint'>Excel is a real .xlsx workbook with one sheet "
+            "per section; CSV is a single flat file.</p></div>"
             "<div class='step'><h4>4. Options</h4>"
             "<div class='choices'>" + options + "</div>"
             "<div class='builder-actions'>" + actions + "</div></div>"
@@ -1347,6 +1347,7 @@ def _preview_pane(storage, live: bool, kind, since, until, flags) -> str:
     query = ("?kind=" + kind
              + ("&amp;since=" + e(since) if since else "")
              + ("&amp;until=" + e(until) if until else "")
+             + "&amp;opts=1"
              + "".join("&amp;options=" + k for k, on in flags.items() if on))
 
     if live:
@@ -1772,8 +1773,7 @@ def reports(storage, live: bool, params: dict) -> str:
         kind = "summary"
     fmt = get("format") if get("format") in reporting.FORMATS else "pdf"
     since_raw, until_raw = get("since"), get("until")
-    flags = reporting.resolve_options(
-        params.get("options") if "options" in params else None)
+    flags = reporting.resolve_options(params.get("options_list"))
 
     body = _tabs(live, view)
 

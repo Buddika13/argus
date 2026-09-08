@@ -43,7 +43,13 @@ def _params(query: str) -> dict:
     """
     parsed = parse_qs(query, keep_blank_values=True)
     params = {k: v[0] for k, v in parsed.items()}
-    params["options_list"] = parsed.get("options", [])
+    # An unticked checkbox submits nothing, so "no options" and "the form was
+    # never submitted" look identical in a query string. The builder sends a
+    # hidden marker, which is what tells the two apart: with the marker, an
+    # absent option means the reader unticked it; without it, the request came
+    # from somewhere else and the defaults apply.
+    params["options_list"] = (parsed.get("options", [])
+                              if "opts" in parsed else None)
     return params
 
 
@@ -60,7 +66,7 @@ def build_report(storage, params: dict, vantage: str):
         since=reporting.parse_day(params.get("since", "")),
         until=reporting.parse_day(params.get("until", ""), end_of_day=True),
         vantage=vantage,
-        options=reporting.resolve_options(params.get("options_list") or []))
+        options=reporting.resolve_options(params.get("options_list")))
     return report, fmt
 
 

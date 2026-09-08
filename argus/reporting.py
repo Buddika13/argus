@@ -28,6 +28,7 @@ from pathlib import Path
 from . import __version__
 from .dashboard import verdict
 from .pdfdoc import PdfDocument
+from .xlsx import Workbook
 
 # key, title, one-line description
 REPORT_TYPES = (
@@ -46,7 +47,9 @@ REPORT_TYPES = (
 )
 
 REPORT_TITLES = {key: title for key, title, _d in REPORT_TYPES}
-FORMATS = ("pdf", "csv")
+# Offered on the Reports page, in this order.
+FORMATS = ("pdf", "csv", "xlsx")
+FORMAT_LABELS = {"pdf": "PDF", "csv": "CSV", "xlsx": "Excel"}
 
 # Which optional sections a report may carry. The names are what the Reports
 # page shows as checkboxes.
@@ -58,7 +61,7 @@ OPTIONS = (
 )
 DEFAULT_OPTIONS = {"charts": True, "details": True, "alerts": True, "limits": True}
 
-_SAFE_NAME = re.compile(r"^argus-[a-z]+-\d{8}-\d{6}\.(pdf|csv)$")
+_SAFE_NAME = re.compile(r"^argus-[a-z]+-\d{8}-\d{6}\.(pdf|csv|xlsx)$")
 
 
 # -- section model ----------------------------------------------------------
@@ -748,8 +751,76 @@ def to_csv(report: Report) -> bytes:
     return buffer.getvalue().encode("utf-8-sig")
 
 
-RENDERERS = {"pdf": to_pdf, "csv": to_csv}
-MIME = {"pdf": "application/pdf", "csv": "text/csv; charset=utf-8"}
+def to_xlsx(report: Report) -> bytes:
+    """One sheet per section, with real numbers left numeric.
+
+    A chart cannot go into a plain worksheet, so a chart section is written as
+    the rows it was drawn from: the reader loses the picture, never the data,
+    and can rebuild the chart in Excel from the numbers.
+    """
+    book = Workbook(title="%s - Argus" % report.title)
+
+    front = book.sheet("Report")
+    front.row(["Argus report", report.title], header=True)
+    front.row(["Period", report.period])
+    front.row(["Generated", time.strftime("%Y-%m-%d %H:%M:%S",
+                                          time.localtime(report.generated_at))])
+    front.row(["Vantage", report.vantage])
+    front.row(["Argus version", __version__])
+
+    def plain(cell):
+        return cell[0] if isinstance(cell, tuple) else cell
+
+    for index, section in enumerate(report.sections, start=1):
+        name = section.heading or ("Section %d" % index)
+        sheet = book.sheet("%d. %s" % (index, name))
+        if section.note:
+            sheet.row([section.note])
+            sheet.blank()
+
+        if section.kind == "tiles":
+            sheet.row(["Measure", "Value"], header=True)
+            for label, value, _tone in section.payload:
+                sheet.row([label, value])
+        elif section.kind in ("bars", "stack", "donut"):
+            sheet.row(["Label", "Value"], header=True)
+            for label, value, _tone in section.payload:
+                sheet.row([label, value])
+        elif section.kind == "trend":
+            sheet.row(["Resolver", "Time", "Response time (ms)"], header=True)
+            for entry in section.payload:
+                for stamp, value in entry["points"]:
+                    sheet.row([entry["name"], _stamp(stamp), round(value, 2)])
+        elif section.kind == "findings":
+            sheet.row(["Finding"], header=True)
+            for text, _tone in section.payload:
+                sheet.row([text])
+        elif section.kind == "scorecards":
+            sheet.row(["Resolver", "Correctness (%)", "Status"], header=True)
+            for label, value, status, _tone in section.payload:
+                sheet.row([label, round(value, 1)
+                           if isinstance(value, (int, float)) else "", status])
+        elif section.kind == "table":
+            spec = section.payload
+            sheet.row(list(spec["headers"]), header=True)
+            for row in spec["rows"]:
+                sheet.row([plain(cell) for cell in row])
+        elif section.kind == "kv":
+            sheet.row(["Item", "Value"], header=True)
+            for label, value in section.payload:
+                sheet.row([label, value])
+        elif section.kind == "text":
+            sheet.row([str(section.payload)])
+    return book.render()
+
+
+RENDERERS = {"pdf": to_pdf, "csv": to_csv, "xlsx": to_xlsx}
+MIME = {
+    "pdf": "application/pdf",
+    "csv": "text/csv; charset=utf-8",
+    "xlsx": ("application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet"),
+}
 
 
 def render(report: Report, fmt: str) -> bytes:
