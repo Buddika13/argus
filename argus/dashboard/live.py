@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .. import reporting
+from .. import digtool
 from ..comparison import compare
 from ..models import MonitoredResolver
 from ..probe import ResolverProbe
@@ -71,7 +72,8 @@ def build_report(storage, params: dict, vantage: str):
     return report, fmt
 
 
-def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
+def run_verification(domain: str, rtype: str, resolver_name: str,
+                    storage: Storage | None = None) -> dict:
     """Query one resolver, the controls and the hierarchy; classify the result.
 
     Reuses the monitoring pipeline rather than duplicating it, so the dashboard
@@ -117,6 +119,19 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
         classification = outcome.classification
         reason = outcome.reason
 
+    # Capture the same two paths as dig prints them. This is evidence for the
+    # reader, not input to the verdict: the classification above is already
+    # settled by dnspython, and stays settled whether or not dig is installed.
+    try:
+        evidence = digtool.capture(domain, target.address, rtype,
+                                   timeout=settings.query["timeout_seconds"])
+    except digtool.InvalidQuery as exc:
+        evidence = {"available": False, "reason": str(exc)}
+    except Exception as exc:                           # noqa: BLE001
+        log.warning("dig capture failed: %s", exc)
+        evidence = {"available": False,
+                    "reason": "dig could not be run: %s" % exc}
+
     control_results = {}
     for control in controls:
         if control.address == target.address and control.port == target.port:
@@ -140,7 +155,31 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
     else:
         match_type = "MATCH"
 
+    # Record the check the same way a sweep records one, so it reaches the
+    # Results, Dashboard and Reports pages through the existing tables rather
+    # than a parallel store. The dig output goes beside it as evidence.
+    stored_id = None
+    if storage is not None:
+        try:
+            storage.upsert_resolver(target)
+            storage.upsert_domain(domain)
+            qid = storage.insert_query_result(direct)
+            aid = storage.insert_authoritative_result(truth)
+            stored_id = storage.insert_comparison(result, target.name, domain,
+                                                  qid, aid, direct.observed_at)
+            storage.insert_check_evidence(
+                stored_id, direct.observed_at, target.name, target.address,
+                domain, rtype, evidence if evidence.get("available") else {},
+                match_type,
+                error="" if evidence.get("available") else evidence.get("reason", ""))
+        except Exception:                              # noqa: BLE001
+            # A check the operator can see is worth more than a stored row;
+            # never fail the page because the write failed.
+            log.exception("could not store the on-demand check")
+            stored_id = None
+
     return {
+        "stored_id": stored_id,
         "resolver": target.name, "resolver_ip": target.address,
         "resolver_role": target.role, "resolver_isp": target.isp,
         "domain": domain, "rtype": rtype,
@@ -159,6 +198,7 @@ def run_verification(domain: str, rtype: str, resolver_name: str) -> dict:
         "severity": verdict.severity_of(classification.value) or "None",
         "severity_tone": verdict.severity_tone(classification.value),
         "checked_at": time.time(),
+        "dig": evidence,
         "stage1": result.classification.value,
         "classification": classification.value,
         "reason": reason,
@@ -202,7 +242,8 @@ def render_page(storage: Storage, key: str, vantage: str, params: dict,
             try:
                 result = run_verification(params.get("domain", ""),
                                           params.get("rtype", "A"),
-                                          params.get("resolver", ""))
+                                          params.get("resolver", ""),
+                                          storage=storage)
             except Exception as exc:                       # noqa: BLE001
                 log.exception("live verification failed")
                 result = {"error": "The verification check could not be "

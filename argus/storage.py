@@ -157,6 +157,25 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_al_time ON alerts (confirmed_at);
 
+-- Raw dig evidence for one on-demand check, kept beside the comparison it
+-- belongs to. Sweeps do not populate this: they resolve natively and have no
+-- dig output to store. It exists so a finding can be reproduced verbatim.
+CREATE TABLE IF NOT EXISTS check_evidence (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    comparison_id     INTEGER REFERENCES comparisons(id),
+    observed_at       REAL NOT NULL,
+    resolver          TEXT NOT NULL,
+    resolver_ip       TEXT,
+    domain            TEXT NOT NULL,
+    rtype             TEXT NOT NULL,
+    untrusted_command TEXT,
+    untrusted_output  TEXT,
+    trusted_command   TEXT,
+    trusted_output    TEXT,
+    match_type        TEXT,
+    error             TEXT
+);
+
 CREATE TABLE IF NOT EXISTS dnssec_status (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     observed_at      REAL NOT NULL,
@@ -533,6 +552,32 @@ class Storage:
         return self._conn.execute(
             "SELECT * FROM anomalies" + where + " ORDER BY observed_at DESC",
             params).fetchall()
+
+    def insert_check_evidence(self, comparison_id, observed_at: float,
+                              resolver: str, resolver_ip: str, domain: str,
+                              rtype: str, evidence: dict, match_type: str,
+                              error: str = "") -> int:
+        """Keep the dig output behind one on-demand check."""
+        untrusted = (evidence or {}).get("untrusted") or {}
+        trusted = (evidence or {}).get("trusted") or {}
+        cur = self._conn.execute(
+            "INSERT INTO check_evidence (comparison_id, observed_at, resolver,"
+            " resolver_ip, domain, rtype, untrusted_command, untrusted_output,"
+            " trusted_command, trusted_output, match_type, error)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (comparison_id, observed_at, resolver, resolver_ip, domain, rtype,
+             untrusted.get("command", ""), untrusted.get("stdout", ""),
+             trusted.get("command", ""), trusted.get("stdout", ""),
+             match_type, error or (evidence or {}).get("reason", "")))
+        self._conn.commit()
+        return cur.lastrowid
+
+    def evidence_for(self, domain: str, resolver: str,
+                     limit: int = 10) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM check_evidence WHERE domain=? AND resolver=?"
+            " ORDER BY observed_at DESC LIMIT ?",
+            (domain, resolver, limit)).fetchall()
 
     def anomaly_by_id(self, anomaly_id: int) -> Optional[sqlite3.Row]:
         return self._conn.execute(

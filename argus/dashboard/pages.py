@@ -943,6 +943,34 @@ def _answer_block(domain: str, rtype: str, records, ttl, highlight=()) -> str:
     return out
 
 
+def _raw_dig(part) -> str:
+    """dig's own output, exactly as it printed it."""
+    text = (part.get("stdout") or "").rstrip()
+    if not text:
+        text = (part.get("stderr") or "").rstrip() or ";; dig produced no output"
+    lines = ""
+    for line in text.splitlines():
+        css = "digline"
+        if line.lstrip().startswith(";;") or line.lstrip().startswith(";"):
+            css += " muted"
+        lines += "<div class='" + css + "'>" + e(line) + "</div>"
+    return lines
+
+
+def _path_body(part, domain, rtype, records, ttl, highlight=()):
+    """Raw dig output where dig ran; the measured answer where it did not.
+
+    Both show the same records, because both come from the same query -- the
+    difference is only whether the reader is looking at dig's own text or at
+    Argus's measurement printed in dig's shape.
+    """
+    if part and part.get("ok"):
+        return _raw_dig(part), True
+    if part and not part.get("ok"):
+        return _raw_dig(part), True
+    return _answer_block(domain, rtype, records, ttl, highlight), False
+
+
 def _path_card(side: str, title: str, blurb: str, command: str,
                body: str, footer: str = "") -> str:
     return ("<div class='pathcard " + side + "'>"
@@ -1015,30 +1043,41 @@ def _domain_check(storage, live: bool, result, params: dict) -> str:
             "</div>")
 
     # -- the two resolution paths ----------------------------------------
-    untrusted_cmd = ("dig @%s %s %s +noall +answer"
-                     % (resolver_ip, domain, rtype))
-    trusted_cmd = "dig +trace %s %s" % (domain, rtype)
+    dig = result.get("dig") or {}
+    dig_ok = bool(dig.get("available"))
+    left_dig = dig.get("untrusted") if dig_ok else None
+    right_dig = dig.get("trusted") if dig_ok else None
 
-    if result["direct_ok"]:
-        left_body = _answer_block(domain, rtype, result["direct"],
-                                  result["ttl"], unexpected)
+    untrusted_cmd = ((left_dig or {}).get("command")
+                     or "dig @%s %s %s +noall +answer"
+                     % (resolver_ip, domain, rtype))
+    trusted_cmd = ((right_dig or {}).get("command")
+                   or "dig +trace %s %s" % (domain, rtype))
+
+    if result["direct_ok"] or left_dig:
+        left_body, left_raw = _path_body(left_dig, domain, rtype,
+                                         result["direct"], result["ttl"],
+                                         unexpected)
         left_foot = ("Response code <b>" + e(result["rcode"]) + "</b> &middot; "
                      + ms(result["latency"]) + " &middot; TTL "
                      + (str(result["ttl"]) if result["ttl"] is not None else "&mdash;"))
     else:
         left_body = ("<div class='digline bad'>;; " + e(result["direct_error"]
                      or "the resolver did not answer") + "</div>")
+        left_raw = False
         left_foot = "The monitored resolver could not be measured."
 
-    if result["auth_ok"]:
-        right_body = _answer_block(domain, rtype, result["authoritative"],
-                                   result["auth_ttl"])
+    if result["auth_ok"] or right_dig:
+        right_body, right_raw = _path_body(right_dig, domain, rtype,
+                                           result["authoritative"],
+                                           result["auth_ttl"])
         right_foot = ("Walked " + e(" &rarr; ".join(result["chain"]) or "direct")
                       + " &middot; answered by "
                       + e(", ".join(result["auth_servers"]) or "&mdash;"))
     else:
         right_body = ("<div class='digline bad'>;; " + e(result["auth_error"]
                       or "the hierarchy could not be walked") + "</div>")
+        right_raw = False
         right_foot = "Ground truth could not be established for this name."
 
     body = head + ("<div class='paths two'>"
@@ -1050,12 +1089,20 @@ def _domain_check(storage, live: bool, result, params: dict) -> str:
                          "Walk the hierarchy: root → TLD → authoritative.",
                          trusted_cmd, right_body, right_foot)
             + "</div>"
-            "<p class='note'>Argus resolves with dnspython rather than calling "
-            "<code>dig</code>, so the commands above are the standard-tool "
-            "equivalent and the answers beneath them are the measured records "
-            "printed the way dig prints them. <code>dig +trace</code> fetches "
-            "out-of-bailiwick glue through the local system resolver, whereas "
-            "the trusted path sub-walks from the root for it.</p>")
+            + (note("Both panels above are <b>dig's own output</b>, captured "
+                    "by the backend when this check ran. The verdict below is "
+                    "not read from that text: it comes from Argus's own "
+                    "resolution, so the classification is the same whether or "
+                    "not dig is installed. Note that <code>dig +trace</code> "
+                    "fetches out-of-bailiwick glue through the local system "
+                    "resolver, whereas Argus sub-walks from the root for it, "
+                    "so the two paths can differ on unusual delegations.")
+               if (left_raw or right_raw) else
+               note("<b>" + e(dig.get("reason", "dig is not available."))
+                    + "</b> The panels above therefore show the records Argus "
+                    "measured, printed the way dig prints them. Install dig to "
+                    "capture its raw output as reproducible evidence; the "
+                    "verdict is unaffected either way.", "warn")))
 
     # -- comparison result ------------------------------------------------
     verdict_note = {
