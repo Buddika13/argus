@@ -473,10 +473,25 @@ ASSET_LOGO = (
 # drawn by hand, so the shape is the real one; 160 points in a 0-100 box.
 LANKA_PATH = ("M14.5 0.0L14.5 1.3L14.9 2.6L15.1 3.8L15.3 5.1L20.8 6.4L21.0 7.7L23.2 9.0L23.2 10.2L22.0 11.5L22.8 12.8L23.2 14.1L23.0 15.4L22.2 16.7L18.3 17.9L14.3 19.2L13.4 20.5L13.0 21.8L12.8 23.1L12.2 24.3L11.6 25.6L11.2 26.9L11.2 28.2L11.0 29.5L9.8 30.7L9.0 32.0L6.7 33.3L6.3 34.6L5.3 35.9L5.1 37.1L4.5 38.4L4.5 39.7L4.5 41.0L4.7 42.3L4.7 43.5L3.7 44.8L3.5 46.1L2.4 47.4L1.0 48.7L1.0 50.0L1.4 51.2L1.4 52.5L0.0 53.8L0.0 55.1L0.0 56.4L1.4 57.6L1.4 58.9L0.8 60.2L0.6 61.5L1.0 62.8L7.5 64.0L12.0 65.3L12.4 66.6L12.4 67.9L12.4 69.2L12.4 70.4L3.7 71.7L3.3 73.0L3.3 74.3L4.7 75.6L4.9 76.8L5.5 78.1L6.7 79.4L6.5 80.7L6.5 82.0L8.1 83.3L8.3 84.5L8.8 85.8L8.8 87.1L9.8 88.4L10.4 89.7L10.6 90.9L11.2 92.2L12.4 93.5L14.3 94.8L19.8 96.1L21.6 97.3L22.2 98.6L22.2 99.9L22.3 100.0L59.4 100.0L59.5 99.9L61.7 98.6L66.6 97.3L68.0 96.1L75.0 94.8L80.0 93.5L87.6 92.2L89.4 90.9L92.1 89.7L94.7 88.4L96.1 87.1L98.0 85.8L98.8 84.5L98.8 83.3L97.8 82.0L97.6 80.7L99.6 79.4L99.6 78.1L99.4 76.8L99.0 75.6L100.0 74.3L100.0 73.0L100.0 71.7L100.0 70.4L100.0 69.2L100.0 67.9L100.0 66.6L99.0 65.3L98.4 64.0L96.9 62.8L95.5 61.5L92.3 60.2L91.7 58.9L91.2 57.6L90.8 56.4L91.2 55.1L91.2 53.8L90.8 52.5L89.6 51.2L88.6 50.0L88.0 48.7L85.5 47.4L84.7 46.1L83.1 44.8L82.7 43.5L82.5 42.3L82.1 41.0L81.9 39.7L81.5 38.4L81.5 37.1L81.3 35.9L74.7 34.6L74.5 33.3L72.7 32.0L72.3 30.7L70.7 29.5L70.1 28.2L68.6 26.9L67.0 25.6L65.8 24.3L65.0 23.1L63.5 21.8L62.5 20.5L61.1 19.2L58.7 17.9L57.8 16.7L57.6 15.4L56.2 14.1L53.0 12.8L51.9 11.5L50.3 10.2L47.7 9.0L45.8 7.7L42.6 6.4L40.9 5.1L38.7 3.8L37.5 2.6L37.3 1.3L37.2 0.0Z")
 
+# The trace normalised x and y to 0-100 independently. That is fine as data
+# but it is not a shape: drawn in a square box the island comes out twice as
+# wide as it is. Sri Lanka's bounding box is almost exactly half as wide as it
+# is tall, so the horizontal axis is scaled back by that ratio wherever the
+# path is drawn, and the viewBox is narrowed to match.
+LANKA_ASPECT = 0.501
+LANKA_BOX = "0 0 %.1f 100" % (100 * LANKA_ASPECT)
+
+
+def lanka_shape(css_class: str) -> str:
+    """The island path, squeezed back to its true proportions."""
+    return ('<g transform="scale(%.3f 1)"><path d="%s" class="%s"/></g>'
+            % (LANKA_ASPECT, LANKA_PATH, css_class))
+
+
 ASSET_LANKA = (
-    '<svg class="lanka" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" '
-    'role="img" aria-label="Map of Sri Lanka">'
-    '<path d="' + LANKA_PATH + '" fill="currentColor" opacity=".55"/></svg>')
+    '<svg class="lanka" viewBox="' + LANKA_BOX + '" '
+    'preserveAspectRatio="xMidYMid meet" role="img" '
+    'aria-label="Map of Sri Lanka">' + lanka_shape("island") + "</svg>")
 
 
 def national_map(markers: str = "") -> str:
@@ -487,11 +502,10 @@ def national_map(markers: str = "") -> str:
     inventing positions would put fabricated infrastructure on a national map.
     """
     body = ('<div class="mapwrap"><div class="mapinner">'
-            '<svg class="mapsvg" viewBox="0 0 100 100" '
+            '<svg class="mapsvg" viewBox="' + LANKA_BOX + '" '
             'preserveAspectRatio="xMidYMid meet" role="img" '
             'aria-label="Monitored resolver locations in Sri Lanka">'
-            '<path d="' + LANKA_PATH + '" class="landmass"/>' + markers
-            + "</svg></div>")
+            + lanka_shape("landmass") + markers + "</svg></div>")
     if not markers:
         body += ("<p class='mapnote'>No resolver locations available. Add "
                  "<code>map_x</code> and <code>map_y</code> (0-100) to a "
@@ -622,8 +636,8 @@ border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:14px}
 letter-spacing:.055em;line-height:1}
 .brand .wm span{display:block;font-size:10px;letter-spacing:.1em;
 text-transform:uppercase;color:var(--railink);opacity:.85;margin-top:4px}
-.navlink{display:flex;align-items:center;gap:11px;padding:10px 20px;
-color:var(--railink);text-decoration:none;font-size:13.5px;
+.navlink{display:flex;align-items:center;gap:12px;padding:12px 20px;
+color:var(--railink);text-decoration:none;font-size:14px;
 border-left:3px solid transparent;
 transition:background .16s ease,color .16s ease,border-color .16s ease}
 .navlink svg{flex:none;opacity:.85}
@@ -636,8 +650,11 @@ border-left-color:#7fb0e0;font-weight:600}
 .navcount{margin-left:auto;background:#c0392b;color:#fff;font-size:10.5px;
 font-weight:700;min-width:19px;height:19px;border-radius:999px;padding:0 6px;
 display:inline-flex;align-items:center;justify-content:center}
-.railfoot{margin-top:auto;padding:22px 20px 0;margin:auto 14px 0;
+/* The quote block follows the navigation instead of being pinned to the
+   bottom of a tall viewport, which left a wide empty band between them. */
+.railfoot{margin:26px 14px 0;padding:20px 6px 0;
 border-top:1px solid rgba(255,255,255,.09)}
+.railspacer{flex:1 1 auto;min-height:8px}
 .railfoot .quote{color:#fff;opacity:.9;font-size:13px;line-height:1.5;
 font-style:italic}
 .railfoot .caveat{font-size:10.5px;color:var(--railink);opacity:.7;
@@ -929,7 +946,8 @@ color:var(--muted)}
 .appbar .r{font-weight:600;color:var(--ink);opacity:.75}
 
 /* sidebar map */
-.lanka{display:block;width:96px;height:auto;margin:0 auto 12px;color:#7fb0e0}
+.lanka{display:block;width:76px;height:auto;margin:0 auto 14px;color:#7fb0e0}
+.lanka .island{fill:currentColor;opacity:.5}
 
 /* national map panel */
 .mapwrap{display:flex;flex-direction:column;align-items:center;gap:10px}
@@ -1116,6 +1134,7 @@ _DOC = """<!doctype html>
   <div class="brand">{eye}<div class="wm"><b>ARGUS</b>
     <span>National DNS Monitoring</span></div></div>
   {nav}
+  <div class="railspacer"></div>
   <div class="railfoot">
     {lanka}
     <div class="quote">&ldquo;A safer internet for a stronger Sri Lanka&rdquo;</div>

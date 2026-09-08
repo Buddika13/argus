@@ -16,7 +16,8 @@ from .. import reporting
 from . import verdict
 from .shell import (ASSET_LOGO, HEALTHY, ICON_CLOCK, ICON_PLAY, ICON_REPORT,
                     KPI_ICONS,
-                    NO_DATA, SERIES_COLOURS, STATUS_SEVERITY, badge, bar, donut,
+                    LANKA_ASPECT, NO_DATA, SERIES_COLOURS,
+                    STATUS_SEVERITY, badge, bar, donut,
                     e, empty_state, findings, gauge, kpi, linechart, link, ms,
                     national_map, note, pagehead, pct, rate, records,
                     resolver_status, scorecard, sparkline, status_tone, table,
@@ -178,10 +179,13 @@ def _resolver_map(rows) -> str:
         if not (resolver.enabled and resolver.has_location):
             continue
         tone = tones.get(resolver.name, "muted")
-        markers += ('<circle class="marker %s" cx="%.2f" cy="%.2f" r="2.4">'
+        # Markers sit outside the scaled group so they stay round; the x
+        # percentage the operator supplies is mapped onto the narrowed box.
+        markers += ('<circle class="marker %s" cx="%.2f" cy="%.2f" r="1.9">'
                     "<title>%s (%s)</title></circle>"
-                    % (tone if tone in ("bad", "warn") else "", resolver.map_x,
-                       resolver.map_y, e(resolver.name), e(resolver.address)))
+                    % (tone if tone in ("bad", "warn") else "",
+                       resolver.map_x * LANKA_ASPECT, resolver.map_y,
+                       e(resolver.name), e(resolver.address)))
     return national_map(markers)
 
 
