@@ -1161,11 +1161,25 @@ min-height:0;border:0;background:var(--bg)}
 /* report builder */
 .builder{display:block;background:var(--panel);border:1px solid var(--line);
 border-radius:10px;padding:0;margin-bottom:18px;box-shadow:var(--shadow)}
-.builder .steps{display:grid;
-grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0;
-align-items:start}
-.builder .step{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
+/* Four equal columns that always fill the card width. auto-fit was leaving
+   a void on the right on wide screens; explicit tracks with minmax(0,1fr)
+   cannot. Two columns on a medium screen, one when genuinely narrow. */
+.builder .steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+gap:0;align-items:stretch}
+.builder .step{padding:16px 18px;border-right:1px solid var(--line);
+min-width:0;border-bottom:1px solid transparent}
 .builder .step:last-child{border-right:none}
+@media(max-width:980px){
+  .builder .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .builder .step{border-bottom:1px solid var(--line)}
+  .builder .step:nth-child(2n){border-right:none}
+  .builder .step:nth-last-child(-n+2){border-bottom:1px solid transparent}
+}
+@media(max-width:620px){
+  .builder .steps{grid-template-columns:1fr}
+  .builder .step{border-right:none;border-bottom:1px solid var(--line)}
+  .builder .step:last-child{border-bottom:none}
+}
 .builder h4{margin:0 0 10px;font-size:12px;font-weight:700;color:var(--ink);
 letter-spacing:.01em}
 .builder h4.next{margin-top:16px}
