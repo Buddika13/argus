@@ -1161,22 +1161,21 @@ min-height:0;border:0;background:var(--bg)}
 /* report builder */
 .builder{display:block;background:var(--panel);border:1px solid var(--line);
 border-radius:10px;padding:0;margin-bottom:18px;box-shadow:var(--shadow)}
-/* Four equal columns that always fill the card width. auto-fit was leaving
-   a void on the right on wide screens; explicit tracks with minmax(0,1fr)
-   cannot. Two columns on a medium screen, one when genuinely narrow. */
-.builder .steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+/* Three height-balanced columns that fill the card width: report types on
+   the left, time period stacked over format in the middle to match that
+   height, options on the right. Balanced columns leave no void on a wide
+   screen. Collapses to one column when genuinely narrow. */
+.builder .steps.three{display:grid;
+grid-template-columns:minmax(0,1.4fr) minmax(0,1.05fr) minmax(0,0.85fr);
 gap:0;align-items:stretch}
 .builder .step{padding:16px 18px;border-right:1px solid var(--line);
-min-width:0;border-bottom:1px solid transparent}
+min-width:0}
 .builder .step:last-child{border-right:none}
-@media(max-width:980px){
-  .builder .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .builder .step{border-bottom:1px solid var(--line)}
-  .builder .step:nth-child(2n){border-right:none}
-  .builder .step:nth-last-child(-n+2){border-bottom:1px solid transparent}
-}
-@media(max-width:620px){
-  .builder .steps{grid-template-columns:1fr}
+.builder .daterange{display:flex;gap:10px;flex-wrap:wrap}
+.builder .daterange .field{flex:1 1 120px}
+.builder .daterange input{width:100%}
+@media(max-width:860px){
+  .builder .steps.three{grid-template-columns:1fr}
   .builder .step{border-right:none;border-bottom:1px solid var(--line)}
   .builder .step:last-child{border-bottom:none}
 }

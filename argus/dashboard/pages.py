@@ -1745,23 +1745,28 @@ def _report_form(live: bool, kind: str, since: str, until: str, fmt: str,
                    "<span class='muted small'>Downloading needs the built-in "
                    "server: <code>python -m argus dashboard</code></span>")
 
+    # Three columns, height-balanced: the report types fill the tall left
+    # column, the middle stacks time period over format to match that height,
+    # and options sit on the right. Balanced columns fill the card width, which
+    # is what keeps a blank band from opening on the right of a wide screen.
     return ("<form class='builder' method='get' action='"
             + link("reports", live) + "'>"
             "<input type='hidden' name='view' value='preview'>"
             "<input type='hidden' name='opts' value='1'>"
-            "<div class='steps'>"
+            "<div class='steps three'>"
             "<div class='step'><h4>1. Select report type</h4>"
             "<div class='choices'>" + types + "</div></div>"
             "<div class='step'><h4>2. Select time period</h4>"
+            "<div class='daterange'>"
             "<div class='field'><label for='since'>From</label>"
             "<input id='since' name='since' type='date' value='" + e(since)
             + "'></div>"
             "<div class='field'><label for='until'>To</label>"
             "<input id='until' name='until' type='date' value='" + e(until)
-            + "'></div>"
+            + "'></div></div>"
             "<p class='hint'>Leave both empty for every measurement on "
-            "record.</p></div>"
-            "<div class='step'><h4>3. Select format</h4>"
+            "record.</p>"
+            "<h4 class='next'>3. Select format</h4>"
             "<div class='choices'>" + formats + "</div>"
             "<p class='hint'>Excel is a real .xlsx workbook with one sheet "
             "per section; CSV is a single flat file.</p></div>"
