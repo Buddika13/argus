@@ -877,9 +877,10 @@ place-items:center;font-size:12px;font-weight:700;margin-top:1px}
 
 /* report builder */
 .reportsplit{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
-form.builder{display:grid;gap:16px;grid-template-columns:1fr;margin:0}
-@media(min-width:620px){form.builder{grid-template-columns:1fr 1fr}
-form.builder .step:first-child{grid-row:span 2}}
+/* The builder's layout lives in the newer block below (.builder{display:block}
+   with .steps.three). The old two-column form.builder grid that used to sit
+   here overrode it on specificity and squeezed the three columns into the left
+   half, leaving the blank band on the right -- so it is gone. */
 .builder .step h4{margin:0 0 9px;font-size:11px;font-weight:700;
 text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
 .builder .field{margin-bottom:9px}
