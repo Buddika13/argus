@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARGUS Interface Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --ground:#eef1f5; --panel:#ffffff; --panel-2:#f5f7f9;
+    --ink:#101a26; --ink-2:#3a4a5c; --muted:#647587; --rule:#d7dee6;
+    --rail:#0f2942; --rail-2:#0b2035; --railink:#9db4cd;
+    --accent:#1f5c96; --accent-soft:#e4eef7;
+    --ok:#256f52; --ok-soft:#e0efe7; --warn:#96620d; --warn-soft:#f6ecd8;
+    --bad:#a83526; --bad-soft:#f6e2de; --violet:#5b4bc4;
+    --sans:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+    --mono:"IBM Plex Mono","Cascadia Mono",Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0c1119; --panel:#141b25; --panel-2:#1a222e;
+      --ink:#e6ecf3; --ink-2:#b6c2d0; --muted:#8395a6; --rule:#28323f;
+      --rail:#0a121c; --rail-2:#070d15; --railink:#8ba4c0;
+      --accent:#6fb4d6; --accent-soft:#152c3d;
+      --ok:#5cc191; --ok-soft:#12291f; --warn:#d6a54a; --warn-soft:#2e2510;
+      --bad:#e08a7d; --bad-soft:#331b17; --violet:#a794f0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0c1119; --panel:#141b25; --panel-2:#1a222e;
+    --ink:#e6ecf3; --ink-2:#b6c2d0; --muted:#8395a6; --rule:#28323f;
+    --rail:#0a121c; --rail-2:#070d15; --railink:#8ba4c0;
+    --accent:#6fb4d6; --accent-soft:#152c3d;
+    --ok:#5cc191; --ok-soft:#12291f; --warn:#d6a54a; --warn-soft:#2e2510;
+    --bad:#e08a7d; --bad-soft:#331b17; --violet:#a794f0;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--ground);color:var(--ink);
+    font-family:var(--sans);font-size:16px;line-height:1.6;
+    -webkit-font-smoothing:antialiased}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  a{color:var(--accent)}
+  code,.mono{font-family:var(--mono);font-size:.88em}
+
+  /* masthead */
+  .mast{background:linear-gradient(160deg,var(--rail),var(--rail-2));
+    color:#eaf1f8;padding:44px 32px 40px}
+  .mast .in{max-width:1100px;margin:0 auto}
+  .brandrow{display:flex;align-items:center;gap:13px;margin-bottom:26px}
+  .eye{width:34px;height:34px;flex:none;color:#4a9fe0}
+  .brandrow b{font-size:21px;font-weight:700;letter-spacing:.12em}
+  .brandrow span{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--railink);display:block;margin-top:2px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.06em;
+    color:#4a9fe0;margin:0 0 12px}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.05;font-weight:700;
+    letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance;max-width:20ch}
+  .lede{font-size:19px;line-height:1.5;color:#cdd9e6;
+    max-width:60ch;margin:0}
+  .scope{display:flex;flex-wrap:wrap;gap:0;margin-top:28px;
+    border-top:1px solid rgba(255,255,255,.13)}
+  .scope div{padding:14px 26px 0 0;margin-right:26px;
+    border-right:1px solid rgba(255,255,255,.1)}
+  .scope div:last-child{border-right:none}
+  .scope b{display:block;font-size:22px;font-weight:700;
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .scope span{font-size:12px;color:var(--railink);letter-spacing:.02em}
+
+  /* layout */
+  .wrap{max-width:1100px;margin:0 auto;padding:0 32px;
+    display:grid;grid-template-columns:212px minmax(0,1fr);gap:44px;
+    align-items:start}
+  @media(max-width:920px){.wrap{grid-template-columns:1fr;gap:0}
+    nav.toc{display:none}}
+  nav.toc{position:sticky;top:20px;padding-top:44px}
+  nav.toc ol{list-style:none;margin:0;padding:0;font-size:13.5px}
+  nav.toc li{margin:0 0 3px}
+  nav.toc a{display:flex;gap:10px;text-decoration:none;color:var(--muted);
+    padding:6px 0;border-radius:4px}
+  nav.toc a:hover{color:var(--accent)}
+  nav.toc .n{font-family:var(--mono);font-size:11px;color:var(--rule);flex:none;
+    padding-top:2px}
+  nav.toc a:hover .n{color:var(--accent)}
+  main{padding:44px 0 90px;min-width:0}
+
+  section{margin:0 0 56px;scroll-margin-top:18px}
+  h2{font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.15;
+    margin:0 0 6px;text-wrap:balance;padding-top:22px;border-top:2px solid var(--ink)}
+  h2 .k{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--accent);
+    display:block;margin-bottom:8px;letter-spacing:.04em}
+  h3{font-size:17px;font-weight:600;margin:30px 0 8px}
+  p{margin:0 0 14px;max-width:66ch;color:var(--ink-2)}
+  .lead{color:var(--ink);font-size:17px}
+  strong{color:var(--ink);font-weight:600}
+  .label{font-family:var(--sans);font-size:11px;font-weight:600;
+    letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+
+  /* flow diagram (the hero mechanism) */
+  .flow{background:var(--panel);border:1px solid var(--rule);border-radius:14px;
+    padding:22px;margin:20px 0 6px;box-shadow:0 1px 3px rgba(16,26,38,.06)}
+  .flowgrid{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;
+    align-items:stretch}
+  @media(max-width:680px){.flowgrid{grid-template-columns:1fr}}
+  .fpath{border-radius:11px;padding:15px 16px;border:1px solid var(--rule)}
+  .fpath.untrusted{background:var(--bad-soft);border-color:transparent}
+  .fpath.trusted{background:var(--ok-soft);border-color:transparent}
+  .fpath h4{margin:0 0 4px;font-size:13px;font-weight:700}
+  .fpath.untrusted h4{color:var(--bad)}.fpath.trusted h4{color:var(--ok)}
+  .fpath .cmd{font-family:var(--mono);font-size:12px;color:var(--ink);
+    background:var(--panel);border-radius:6px;padding:8px 10px;margin:8px 0;
+    display:block;word-break:break-all}
+  .fpath p{font-size:12.5px;margin:0;color:var(--ink-2)}
+  .fmid{display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:8px;color:var(--muted);font-size:22px}
+  .fmid .vs{font-family:var(--mono);font-size:12px;font-weight:600;
+    color:var(--muted);border:1px solid var(--rule);border-radius:999px;
+    width:34px;height:34px;display:grid;place-items:center}
+  .verdictrow{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;
+    padding-top:16px;border-top:1px dashed var(--rule)}
+  .vchip{display:flex;flex-direction:column;gap:2px;flex:1 1 120px;
+    border-radius:9px;padding:10px 12px;border:1px solid var(--rule)}
+  .vchip b{font-size:13px}.vchip span{font-size:11.5px;color:var(--muted)}
+  .vchip.ok{background:var(--ok-soft)}.vchip.ok b{color:var(--ok)}
+  .vchip.warn{background:var(--warn-soft)}.vchip.warn b{color:var(--warn)}
+  .vchip.bad{background:var(--bad-soft)}.vchip.bad b{color:var(--bad)}
+  .vchip.mut b{color:var(--muted)}
+
+  /* principle grid */
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:14px;margin:18px 0}
+  .card{background:var(--panel);border:1px solid var(--rule);border-radius:11px;
+    padding:16px 17px}
+  .card .num{font-family:var(--mono);font-size:12px;color:var(--accent);
+    font-weight:500}
+  .card h4{margin:6px 0 5px;font-size:15px;font-weight:600}
+  .card p{margin:0;font-size:13.5px;color:var(--ink-2)}
+
+  /* design tokens */
+  .swatches{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+  .sw{border:1px solid var(--rule);border-radius:9px;overflow:hidden;width:118px}
+  .sw .chip{height:46px}.sw .meta{padding:7px 9px;font-size:11px}
+  .sw .meta b{display:block;font-size:12px}
+  .sw .meta code{color:var(--muted)}
+  .typerow{display:flex;flex-wrap:wrap;gap:20px;align-items:baseline;
+    padding:14px 0;border-bottom:1px solid var(--rule)}
+  .typerow:last-child{border-bottom:none}
+  .typerow .role{width:150px;flex:none;font-size:12px;color:var(--muted)}
+
+  /* component specimens */
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 4px;
+    border-radius:999px;font-size:12px;font-weight:700}
+  .pill .d{width:15px;height:15px;border-radius:50%;display:grid;place-items:center;
+    color:#fff;font-size:10px;font-weight:700}
+  .pill.ok{background:var(--ok-soft);color:var(--ok)}.pill.ok .d{background:var(--ok)}
+  .pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.warn .d{background:var(--warn)}
+  .pill.bad{background:var(--bad-soft);color:var(--bad)}.pill.bad .d{background:var(--bad)}
+  .pill.mut{background:var(--panel-2);color:var(--muted)}.pill.mut .d{background:var(--muted)}
+  .specimens{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0}
+
+  /* wireframe mock (a miniature of a real screen) */
+  .mock{border:1px solid var(--rule);border-radius:12px;overflow:hidden;
+    display:grid;grid-template-columns:118px 1fr;background:var(--panel);
+    margin:16px 0 6px;box-shadow:0 1px 3px rgba(16,26,38,.06)}
+  .mock .mrail{background:linear-gradient(165deg,var(--rail),var(--rail-2));
+    padding:12px 10px;display:flex;flex-direction:column;gap:6px}
+  .mock .mlogo{color:#eaf1f8;font-weight:700;font-size:12px;letter-spacing:.1em;
+    margin-bottom:6px}
+  .mock .mnav{font-size:10.5px;color:var(--railink);padding:4px 7px;border-radius:5px}
+  .mock .mnav.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
+  .mock .mbody{padding:14px 16px;min-width:0}
+  .mock h5{margin:0 0 3px;font-size:14px;font-weight:700}
+  .mock .msub{font-size:11px;color:var(--muted);margin:0 0 11px}
+  .mtiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+  @media(max-width:680px){.mtiles{grid-template-columns:repeat(2,1fr)}
+    .mock{grid-template-columns:1fr}.mock .mrail{flex-direction:row;flex-wrap:wrap}}
+  .mtile{background:var(--panel-2);border:1px solid var(--rule);border-radius:8px;
+    padding:9px 10px}
+  .mtile b{display:block;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em}
+  .mtile span{font-size:10px;color:var(--muted)}
+  .mtile.ok b{color:var(--ok)}.mtile.bad b{color:var(--bad)}.mtile.info b{color:var(--accent)}
+  .mrow{display:flex;gap:8px;align-items:center;padding:7px 0;
+    border-bottom:1px solid var(--rule);font-size:11.5px}
+  .mrow:last-child{border-bottom:none}
+  .mrow .dom{font-family:var(--mono);font-size:11px;flex:1 1 auto;color:var(--ink)}
+  .mrow .rs{color:var(--muted);width:72px}
+  .caption{font-size:12.5px;color:var(--muted);margin:2px 0 0}
+
+  /* two-column mock for monitoring */
+  .twin{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+  @media(max-width:520px){.twin{grid-template-columns:1fr}}
+  .twin .box{border-radius:8px;padding:9px 10px;font-family:var(--mono);font-size:10.5px}
+  .twin .box.u{background:var(--bad-soft)}.twin .box.t{background:var(--ok-soft)}
+  .twin .box h6{margin:0 0 5px;font-family:var(--sans);font-size:10px;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase}
+  .twin .box.u h6{color:var(--bad)}.twin .box.t h6{color:var(--ok)}
+  .twin .box .ip{color:var(--ink)}
+  .twin .box .ip.x{color:var(--bad);font-weight:600}
+
+  /* mapping table */
+  .maptable{width:100%;border-collapse:collapse;font-size:14px;margin:16px 0 6px}
+  .maptable th,.maptable td{text-align:left;padding:11px 13px;
+    border-bottom:1px solid var(--rule);vertical-align:top}
+  .maptable th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--muted);font-weight:600}
+  .maptable td:first-child{color:var(--ink);font-weight:500;width:44%}
+  .maptable td:last-child{color:var(--ink-2)}
+  .maptable .where{font-family:var(--mono);font-size:12px;color:var(--accent)}
+  .scroller{overflow-x:auto}
+
+  .note{border-left:3px solid var(--accent);background:var(--panel);
+    border-radius:0 9px 9px 0;padding:13px 16px;margin:18px 0;font-size:14.5px;
+    color:var(--ink-2)}
+  .note.gap{border-left-color:var(--warn);background:var(--warn-soft)}
+  .note.gap,.note.gap strong{color:var(--ink)}
+  .note strong{color:var(--ink)}
+
+  footer{max-width:1100px;margin:0 auto;padding:26px 32px 60px;
+    border-top:2px solid var(--ink);color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+
+<header class="mast">
+  <div class="in">
+    <div class="brandrow">
+      <svg class="eye" viewBox="0 0 48 48" fill="none" stroke="currentColor"
+        stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 24s8-13 22-13 22 13 22 13-8 13-22 13S2 24 2 24z"/>
+        <circle cx="24" cy="24" r="6.5"/><circle cx="24" cy="24" r="1.8" fill="currentColor" stroke="none"/>
+      </svg>
+      <div><b>ARGUS</b><span>National DNS Monitoring</span></div>
+    </div>
+    <p class="eyebrow">UI/UX BLUEPRINT · v1.0</p>
+    <h1>How the interface serves the monitoring brief</h1>
+    <p class="lede">A design specification for ARGUS — Sri Lanka's centralised DNS
+      caching-server health and hijack monitor. Every screen here traces back to a
+      supervisor requirement and reads from the real monitoring database, never
+      invented data.</p>
+    <div class="scope">
+      <div><b>5 min</b><span>sweep interval</span></div>
+      <div><b>1</b><span>centralised vantage</span></div>
+      <div><b>2 paths</b><span>compared per check</span></div>
+      <div><b>9</b><span>interface screens</span></div>
+      <div><b>4</b><span>verdict states</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <ol>
+      <li><a href="#brief"><span class="n">01</span><span>The brief, restated</span></a></li>
+      <li><a href="#mechanism"><span class="n">02</span><span>The detection mechanism</span></a></li>
+      <li><a href="#principles"><span class="n">03</span><span>Design principles</span></a></li>
+      <li><a href="#system"><span class="n">04</span><span>Design system</span></a></li>
+      <li><a href="#screens"><span class="n">05</span><span>The nine screens</span></a></li>
+      <li><a href="#mapping"><span class="n">06</span><span>Requirement → screen</span></a></li>
+      <li><a href="#gap"><span class="n">07</span><span>Honest status</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <!-- 01 -->
+    <section id="brief">
+      <h2><span class="k">01 · brief</span>The brief, restated</h2>
+      <p class="lead">Every ISP and organisation runs a caching DNS resolver.
+        A caching resolver can be poisoned — an attacker races a forged reply to
+        the user before the real one arrives, and the cache then serves a wrong
+        address to everyone behind it. ARGUS watches those resolvers, nationwide,
+        from one central machine, and reports whether any of them is being
+        hijacked.</p>
+      <p>The supervisor's instruction sets five fixed points, and the interface is
+        designed around them rather than around a generic dashboard:</p>
+      <div class="grid2">
+        <div class="card"><span class="num">fixed point</span>
+          <h4>Centralised</h4><p>One machine runs the whole watch, not an agent
+          per network. The header always shows which vantage and timezone the
+          numbers come from.</p></div>
+        <div class="card"><span class="num">fixed point</span>
+          <h4>Every five minutes</h4><p>The sweep cadence is a property of the
+          system, shown in the header and provable from the stored timestamps.</p></div>
+        <div class="card"><span class="num">fixed point</span>
+          <h4>Sri Lankan resolvers</h4><p>The public caching resolvers of SL
+          networks are the subjects; the machine holds the list and checks each
+          for hijacking.</p></div>
+        <div class="card"><span class="num">fixed point</span>
+          <h4>Authoritative is truth</h4><p>Ground truth is the answer walked from
+          the root to the zone's own servers — not a trusted third party, which
+          could itself be wrong.</p></div>
+        <div class="card"><span class="num">fixed point</span>
+          <h4>Answers are sets</h4><p>A domain may hold three or four addresses
+          for load balancing, so answers are compared as sets, and a partial
+          overlap is not a hijack.</p></div>
+      </div>
+    </section>
+
+    <!-- 02 -->
+    <section id="mechanism">
+      <h2><span class="k">02 · mechanism</span>The detection mechanism, made visible</h2>
+      <p class="lead">This is the one screen the whole product exists for, so the
+        interface makes the comparison literal: the two resolution paths sit side
+        by side, and the verdict is the relationship between their address sets.</p>
+
+      <div class="flow">
+        <div class="flowgrid">
+          <div class="fpath untrusted">
+            <h4>Untrusted path — the monitored cache</h4>
+            <code class="cmd">dig @&lt;resolver-ip&gt; &lt;domain&gt; A</code>
+            <p>What the ISP's caching resolver claims. An attacker who wins the
+               race has planted a wrong answer here. Never trusted.</p>
+          </div>
+          <div class="fmid"><span class="vs">vs</span></div>
+          <div class="fpath trusted">
+            <h4>Trusted path — walked from the root</h4>
+            <code class="cmd">dig +trace &lt;domain&gt; A</code>
+            <p>Root → TLD → authoritative, resolved independently with no cache in
+               the way. This is ground truth.</p>
+          </div>
+        </div>
+        <div class="verdictrow">
+          <div class="vchip ok"><b>MATCH</b><span>Address sets equal</span></div>
+          <div class="vchip warn"><b>PARTIAL</b><span>Subset — load balancing</span></div>
+          <div class="vchip bad"><b>MISMATCH</b><span>Unpublished IP → possible hijack</span></div>
+          <div class="vchip mut"><b>ERROR</b><span>Timed out / unreachable</span></div>
+        </div>
+      </div>
+      <p class="caption">The comparison is set arithmetic, so a resolver returning
+        4 of a domain's 5 load-balanced addresses reads as PARTIAL, not a hijack.
+        A MISMATCH — an address the zone never published — is the fingerprint that
+        can escalate, and only after a six-stage check is it ever called
+        <em>possible</em> poisoning. It is never called <em>proven</em>.</p>
+    </section>
+
+    <!-- 03 -->
+    <section id="principles">
+      <h2><span class="k">03 · principles</span>Design principles</h2>
+      <p>Five rules govern every screen. They come straight from what the system
+        is for, and they are the reason the interface looks the way it does.</p>
+      <div class="grid2">
+        <div class="card"><span class="num">01</span>
+          <h4>Real data or an empty state</h4><p>Never a fabricated number. Where
+          the database has nothing, the screen says so plainly instead of filling
+          the space with a plausible-looking figure.</p></div>
+        <div class="card"><span class="num">02</span>
+          <h4>Evidence, not assertion</h4><p>Every verdict can be opened to the two
+          dig commands and the two answers behind it, so a finding is reproducible
+          by hand — what a research write-up needs.</p></div>
+        <div class="card"><span class="num">03</span>
+          <h4>State reads at a glance</h4><p>Severity and result are carried in
+          shape and colour — a coloured disc, a pill — not only in a word, so the
+          one row that needs attention is visible without reading.</p></div>
+        <div class="card"><span class="num">04</span>
+          <h4>Careful language</h4><p>"Possible", never "confirmed". The interface
+          never overstates what a passive observer can know, and always offers the
+          legitimate explanations a difference was tested against.</p></div>
+        <div class="card"><span class="num">05</span>
+          <h4>Scanned, not read</h4><p>It is an operations tool: the summary comes
+          before the detail, tables stay compact, and what is interactive looks
+          interactive.</p></div>
+      </div>
+    </section>
+
+    <!-- 04 -->
+    <section id="system">
+      <h2><span class="k">04 · system</span>Design system</h2>
+
+      <h3>Palette</h3>
+      <p>A deep navy carries the identity through the sidebar and header; a single
+        blue accent marks what is active or clickable. Semantic colour — green,
+        amber, red — is reserved for verdicts and never used decoratively, so a
+        red mark on any screen always means the same thing.</p>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:#0f2942"></div>
+          <div class="meta"><b>Rail navy</b><code>#0f2942</code></div></div>
+        <div class="sw"><div class="chip" style="background:#1f5c96"></div>
+          <div class="meta"><b>Accent</b><code>#1f5c96</code></div></div>
+        <div class="sw"><div class="chip" style="background:#256f52"></div>
+          <div class="meta"><b>Match</b><code>#256f52</code></div></div>
+        <div class="sw"><div class="chip" style="background:#96620d"></div>
+          <div class="meta"><b>Partial</b><code>#96620d</code></div></div>
+        <div class="sw"><div class="chip" style="background:#a83526"></div>
+          <div class="meta"><b>Mismatch</b><code>#a83526</code></div></div>
+        <div class="sw"><div class="chip" style="background:#eef1f5;border-bottom:1px solid #d7dee6"></div>
+          <div class="meta"><b>Ground</b><code>#eef1f5</code></div></div>
+      </div>
+
+      <h3>Typography</h3>
+      <p>Two families, chosen for an infrastructure tool rather than a marketing
+        page. IBM Plex Sans carries every heading and label; IBM Plex Mono carries
+        every DNS name, IP address, TTL and command — the data the operator reads
+        most closely — so machine values are always visually distinct from prose.</p>
+      <div>
+        <div class="typerow"><span class="role">Display / H1</span>
+          <span style="font-size:30px;font-weight:700;letter-spacing:-.02em">Cache Poisoning Detection</span></div>
+        <div class="typerow"><span class="role">Heading / H3</span>
+          <span style="font-size:18px;font-weight:600">Resolver health</span></div>
+        <div class="typerow"><span class="role">Body</span>
+          <span style="font-size:15px">The resolver returned an address the zone does not publish.</span></div>
+        <div class="typerow"><span class="role">Label</span>
+          <span class="label">Response time</span></div>
+        <div class="typerow"><span class="role">Mono / data</span>
+          <span class="mono" style="font-size:14px">dig +trace peoplesbank.lk A → 203.115.0.1</span></div>
+      </div>
+
+      <h3>Signature components</h3>
+      <p>Three components do most of the work and recur across screens, so the
+        same state always looks the same.</p>
+      <div class="specimens">
+        <span class="pill ok"><span class="d">&check;</span>MATCH</span>
+        <span class="pill warn"><span class="d">!</span>PARTIAL</span>
+        <span class="pill bad"><span class="d">&times;</span>MISMATCH</span>
+        <span class="pill mut"><span class="d">&minus;</span>ERROR</span>
+      </div>
+      <p class="caption">The result pill — a coloured disc with a glyph and the
+        word — is the atom of the Results and Alerts tables. Severity uses the same
+        disc in High / Medium / Low. The two-path evidence card (red untrusted,
+        green trusted) is the third recurring object, shown in full on the
+        Monitoring screen below.</p>
+    </section>
+
+    <!-- 05 -->
+    <section id="screens">
+      <h2><span class="k">05 · screens</span>The nine screens</h2>
+      <p>One dark rail, nine destinations, one active-blue marker. The rail is
+        identical on every screen so the operator never loses their place; only
+        the working area changes. Below, the three screens that carry the brief.</p>
+
+      <h3>Dashboard — is anything wrong right now?</h3>
+      <div class="mock" role="img" aria-label="Dashboard wireframe">
+        <div class="mrail">
+          <div class="mlogo">◉ ARGUS</div>
+          <div class="mnav on">Dashboard</div><div class="mnav">Resolvers</div>
+          <div class="mnav">Domains</div><div class="mnav">Monitoring</div>
+          <div class="mnav">Results</div><div class="mnav">Alerts</div>
+          <div class="mnav">Reports</div>
+        </div>
+        <div class="mbody">
+          <h5>National DNS Dashboard</h5>
+          <p class="msub">Watch · Detect · Protect — vantage local-dev, every 5 min</p>
+          <div class="mtiles">
+            <div class="mtile ok"><b>5 / 5</b><span>Resolvers online</span></div>
+            <div class="mtile info"><b>27</b><span>Domains watched</span></div>
+            <div class="mtile"><b>1,785</b><span>Checks recorded</span></div>
+            <div class="mtile bad"><b>5</b><span>Possible events</span></div>
+          </div>
+          <div class="mrow"><span class="dom">Sri Lanka map · markers from real resolver locations</span></div>
+          <div class="mrow"><span class="dom">ripe.net</span><span class="rs">quad9</span><span class="pill ok" style="font-size:9px;padding:1px 6px 1px 3px"><span class="d" style="width:11px;height:11px">&check;</span>MATCH</span></div>
+          <div class="mrow"><span class="dom">recent results, newest first</span><span class="rs">live</span></div>
+        </div>
+      </div>
+      <p class="caption">Four headline tiles answer the nationwide-health question
+        in one glance; the national map places resolvers only where the backend
+        supplies real coordinates. Figures shown are this system's real totals.</p>
+
+      <h3>Monitoring — the two paths, on demand</h3>
+      <div class="mock" role="img" aria-label="Monitoring wireframe">
+        <div class="mrail">
+          <div class="mlogo">◉ ARGUS</div>
+          <div class="mnav">Dashboard</div><div class="mnav">Resolvers</div>
+          <div class="mnav">Domains</div><div class="mnav on">Monitoring</div>
+          <div class="mnav">Results</div><div class="mnav">Alerts</div>
+          <div class="mnav">Reports</div>
+        </div>
+        <div class="mbody">
+          <h5>Domain check: peoplesbank.lk</h5>
+          <p class="msub">Untrusted resolver answer vs the trusted trace · illustrative</p>
+          <div class="twin">
+            <div class="box u"><h6>Untrusted · dig @resolver</h6>
+              <div class="ip">203.115.0.1</div><div class="ip x">6.6.6.6 ← unexpected</div></div>
+            <div class="box t"><h6>Trusted · dig +trace</h6>
+              <div class="ip">203.115.0.1</div></div>
+          </div>
+          <div class="mrow"><span class="dom">Verdict</span>
+            <span class="pill bad" style="font-size:9px;padding:1px 6px 1px 3px"><span class="d" style="width:11px;height:11px">&times;</span>MISMATCH</span></div>
+        </div>
+      </div>
+      <p class="caption">The heart of the tool. The IP marked in red is present at
+        the resolver but absent from the trusted answer — the poisoning
+        fingerprint. Addresses shown are <strong>illustrative</strong>, not a real
+        detection.</p>
+
+      <h3>Alerts — findings by severity</h3>
+      <div class="mock" role="img" aria-label="Alerts wireframe">
+        <div class="mrail">
+          <div class="mlogo">◉ ARGUS</div>
+          <div class="mnav">Dashboard</div><div class="mnav">Resolvers</div>
+          <div class="mnav">Domains</div><div class="mnav">Monitoring</div>
+          <div class="mnav">Results</div><div class="mnav on">Alerts</div>
+          <div class="mnav">Reports</div>
+        </div>
+        <div class="mbody">
+          <h5>Alerts</h5>
+          <p class="msub">Filter by severity · resolver · status — real records only</p>
+          <div class="mrow"><span class="pill bad" style="font-size:9px;padding:1px 6px 1px 3px"><span class="d" style="width:11px;height:11px">!</span>HIGH</span><span class="dom">Unexpected IP detected</span><span class="rs">Open</span></div>
+          <div class="mrow"><span class="pill warn" style="font-size:9px;padding:1px 6px 1px 3px"><span class="d" style="width:11px;height:11px">!</span>MED</span><span class="dom">TTL inflation</span><span class="rs">Pending</span></div>
+          <div class="mrow"><span class="dom">View → opens the full evidence chain</span><span class="rs"></span></div>
+        </div>
+      </div>
+      <p class="caption">Severity is derived from the stored classification, and
+        every row's View opens the same evidence the Monitoring screen shows. The
+        other six screens — Resolvers, Domains, Results, Reports, Settings, Help —
+        share this exact chrome and component set.</p>
+    </section>
+
+    <!-- 06 -->
+    <section id="mapping">
+      <h2><span class="k">06 · mapping</span>Requirement → screen</h2>
+      <p>Each of the supervisor's points has a home in the interface. This is the
+        table to walk through in a review.</p>
+      <div class="scroller">
+        <table class="maptable">
+          <thead><tr><th>Supervisor recommendation</th><th>Where it lives</th></tr></thead>
+          <tbody>
+            <tr><td>Nationwide caching-server health &amp; hijack status</td>
+              <td>Dashboard tiles + Sri Lanka map <span class="where">/</span></td></tr>
+            <tr><td>Centralised, runs every 5 minutes</td>
+              <td>Header vantage + interval; the scheduler <span class="where">serve</span></td></tr>
+            <tr><td>List the SL public caching resolvers in the machine</td>
+              <td>Resolvers screen <span class="where">/resolvers</span></td></tr>
+            <tr><td>Untrusted <code>dig @resolver</code> vs trusted <code>dig +trace</code></td>
+              <td>Monitoring two-path cards <span class="where">/verification</span></td></tr>
+            <tr><td>Mismatch between the paths = possible hijack</td>
+              <td>Result pill + Alerts <span class="where">/queries · /anomalies</span></td></tr>
+            <tr><td>Load balancing — several IPs are legitimate</td>
+              <td>Set comparison → PARTIAL, not MISMATCH</td></tr>
+            <tr><td>Authoritative is truth; don't lean on trusted parties</td>
+              <td>Ground truth = the walk; public resolvers only corroborate</td></tr>
+            <tr><td>Query many TLD / authoritative nameservers</td>
+              <td>Verification engine (multi-nameserver hardening, planned)</td></tr>
+            <tr><td>Reproducible research evidence</td>
+              <td>Evidence chain + PDF / CSV / Excel reports <span class="where">/reports</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 07 -->
+    <section id="gap">
+      <h2><span class="k">07 · status</span>Honest status</h2>
+      <p>The interface and the engine are built and working against real data —
+        1,785 measurements, 30 investigated anomalies — but on the five global
+        public resolvers used as the control baseline (Google, Cloudflare, Quad9,
+        OpenDNS, Verisign).</p>
+      <div class="note gap">
+        <strong>The one open step.</strong> The Sri Lankan ISP resolvers — SLT,
+        Mobitel, Dialog, Hutch — are configured but hold placeholder addresses and
+        are disabled, so no SL resolver is being checked yet. Real resolver IPs,
+        read from a Sri Lankan connection, must be entered before the system does
+        the nationwide job the brief describes. This is a data step, not a design
+        one: the screens above already accommodate them.
+      </div>
+      <p>Two enhancements would answer the supervisor's "query as many nameservers
+        as possible" and "make it sophisticated" points: asking every authoritative
+        nameserver for a zone and requiring agreement, and DNSSEC-validating the
+        trusted walk itself so an on-path attacker cannot forge ground truth.</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  ARGUS Interface Blueprint · National DNS caching-server health &amp; cache-poisoning
+  monitor · Department of Computer Science, Sri Lanka. Figures are the system's real
+  stored totals; IP addresses in wireframes are illustrative and labelled as such.
+</footer>
+
+</body>
+</html>
