@@ -681,6 +681,23 @@ class Storage:
             "SELECT * FROM monitoring_events WHERE resolver = ?"
             " ORDER BY timestamp DESC LIMIT ?", (resolver, limit)).fetchall()
 
+    def last_sweep_at(self) -> Optional[float]:
+        """When the most recent sweep computed its health metrics, or None.
+
+        Health metrics are written once per resolver at the end of every sweep,
+        so the newest computed_at is the newest sweep. Used to show the last and
+        next scheduled check, and to judge whether monitoring is running.
+        """
+        row = self._conn.execute(
+            "SELECT max(computed_at) FROM health_metrics").fetchone()
+        return row[0] if row and row[0] else None
+
+    def checks_since(self, since: float) -> int:
+        """How many measurements were recorded at or after a time."""
+        return self._conn.execute(
+            "SELECT count(*) FROM query_results WHERE observed_at >= ?",
+            (since,)).fetchone()[0]
+
     def table_counts(self) -> dict[str, int]:
         return {t: self._conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                 for t in _TABLES}

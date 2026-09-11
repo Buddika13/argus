@@ -351,6 +351,83 @@ def _run_check_box() -> str:
             "leave it running.</p></div></details>")
 
 
+def _tld_count(storage) -> int:
+    """Distinct top-level domains across the watch-list (the last label)."""
+    try:
+        from ..config import load_settings
+        names = load_settings().watchlist
+    except Exception:                                  # noqa: BLE001
+        names = []
+    return len({d.rsplit(".", 1)[-1] for d in names}) if names else 0
+
+
+def _schedule_facts(storage) -> dict:
+    """Real scheduler facts, read from the stored sweeps and the config.
+
+    "Active" is judged, not asserted: monitoring counts as running only if the
+    most recent sweep is recent relative to the configured interval. A sweep
+    from hours ago means the scheduler is not running now, and the banner says
+    so rather than pretending.
+    """
+    import time as _t
+    try:
+        from ..config import load_settings
+        interval = int(load_settings().schedule["interval_seconds"])
+    except Exception:                                  # noqa: BLE001
+        interval = 300
+    last = storage.last_sweep_at()
+    now = _t.time()
+    midnight = _t.mktime(_t.strptime(_t.strftime("%Y-%m-%d"), "%Y-%m-%d"))
+    active = bool(last) and (now - last) <= interval * 2 + 60
+    return {
+        "interval": interval,
+        "last": last,
+        "next": (last + interval) if last else None,
+        "today": storage.checks_since(midnight),
+        "active": active,
+        "ever": bool(last),
+    }
+
+
+def _monitoring_banner(storage, facts) -> str:
+    """A status line stating whether monitoring is actually running."""
+    interval_min = max(1, facts["interval"] // 60)
+    scope = ("%d resolvers &middot; %s domains &middot; %d TLDs &middot; every %d min"
+             % (len([x for x in resolver_summaries(storage) if x["enabled"]]),
+                _watchlist_size(storage), _tld_count(storage), interval_min))
+    if not facts["ever"]:
+        return ("<div class='verdict warn'><span class='dot'></span><div>"
+                "<b>Monitoring has not run yet</b><span>Run a sweep with "
+                "<code>python -m argus run-once</code>, or start continuous "
+                "monitoring with <code>python -m argus serve</code>.</span>"
+                "</div></div>")
+    if facts["active"]:
+        return ("<div class='verdict ok'><span class='dot'></span><div>"
+                "<b>Monitoring is active</b><span>Next scheduled check "
+                + ts(facts["next"]) + " &nbsp;|&nbsp; " + scope + "</span>"
+                "</div></div>")
+    return ("<div class='verdict warn'><span class='dot'></span><div>"
+            "<b>Monitoring is idle</b><span>The last sweep was " + ts(facts["last"])
+            + ". Start continuous monitoring with <code>python -m argus serve</code> "
+            "to keep it running every " + str(interval_min) + " minutes. &nbsp;|&nbsp; "
+            + scope + "</span></div></div>")
+
+
+def _schedule_card(facts) -> str:
+    """The monitoring-schedule panel: interval, last, next, today, status."""
+    interval_min = max(1, facts["interval"] // 60)
+    status = ("<span class='st ok'><span class='statusdot'></span>Scheduler "
+              "running</span>" if facts["active"]
+              else "<span class='st warn'><span class='statusdot'></span>"
+              "Scheduler idle</span>")
+    return ("<div class='panel'><h3>Monitoring schedule</h3><dl class='kv'>"
+            "<dt>Check interval</dt><dd>Every " + str(interval_min) + " minutes</dd>"
+            "<dt>Last check</dt><dd class='mono'>" + ts(facts["last"]) + "</dd>"
+            "<dt>Next check</dt><dd class='mono'>" + ts(facts["next"]) + "</dd>"
+            "<dt>Checks today</dt><dd>" + "{:,}".format(facts["today"]) + "</dd>"
+            "<dt>Status</dt><dd>" + status + "</dd></dl></div>")
+
+
 def overview(storage, live: bool) -> str:
     rows = resolver_summaries(storage)
     counts = storage.table_counts()
@@ -365,7 +442,9 @@ def overview(storage, live: bool) -> str:
     anomalies = counts.get("anomalies", 0)
     has_data = counts.get("query_results", 0) > 0
 
+    facts = _schedule_facts(storage)
     body = _run_check_box()
+    body += _monitoring_banner(storage, facts)
     body += _verdict_banner(alerts, anomalies, has_data)
     if not has_data:
         body += note("No monitoring data available yet. Run a sweep with "
@@ -379,8 +458,8 @@ def overview(storage, live: bool) -> str:
                 "Resolvers responding", link("resolvers", live))
     body += kpi("info", KPI_ICONS["domains"], str(_watchlist_size(storage)),
                 "Domains monitored", link("queries", live))
-    body += kpi("warn" if anomalies else "muted", KPI_ICONS["anomalies"],
-                str(anomalies), "Anomalies investigated", link("anomalies", live))
+    body += kpi("info", KPI_ICONS["domains"], str(_tld_count(storage)),
+                "TLDs covered", link("domains", live))
     body += kpi("bad" if alerts else "ok", KPI_ICONS["uptime"], str(alerts),
                 "Possible poisoning events", link("poisoning", live))
     body += "</div>"
@@ -433,6 +512,8 @@ def overview(storage, live: bool) -> str:
              + _alert_feed(storage)
              + "<p class='small' style='margin:12px 0 0;text-align:right'><a href='"
              + link("anomalies", live) + "'>View all findings &rarr;</a></p></div>")
+
+    body += _schedule_card(facts)
 
     return body + "</div></div>"
 
