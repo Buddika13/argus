@@ -115,6 +115,17 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         raw = _deep_merge(DEFAULTS, loaded)
 
     watchlist = load_watchlist_with_categories(cfg / "watchlist.txt")
+    # The monitoring interval can be overridden from the environment without
+    # editing any file: ARGUS_INTERVAL_SECONDS (or MONITOR_INTERVAL_SECONDS) in
+    # seconds, floored at 10 so a typo cannot melt the resolvers.
+    env_interval = (os.environ.get("ARGUS_INTERVAL_SECONDS")
+                    or os.environ.get("MONITOR_INTERVAL_SECONDS"))
+    if env_interval:
+        try:
+            raw["schedule"]["interval_seconds"] = max(10, int(env_interval))
+        except (TypeError, ValueError):
+            pass
+
     return Settings(
         raw=raw,
         resolvers=load_resolvers(cfg / "resolvers.yaml"),

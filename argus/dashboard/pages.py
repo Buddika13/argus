@@ -410,7 +410,7 @@ def _monitoring_banner(storage, facts) -> str:
     return ("<div class='verdict warn'><span class='dot'></span><div>"
             "<b>Monitoring is idle</b><span>The last sweep was " + ts(facts["last"])
             + ". Start continuous monitoring with <code>python -m argus serve</code> "
-            "to keep it running every " + str(interval_min) + " minutes. &nbsp;|&nbsp; "
+            "to keep it running every " + str(interval_min) + " minute" + ("" if interval_min == 1 else "s") + ". &nbsp;|&nbsp; "
             + scope + "</span></div></div>")
 
 
@@ -422,7 +422,7 @@ def _schedule_card(facts) -> str:
               else "<span class='st warn'><span class='statusdot'></span>"
               "Scheduler idle</span>")
     return ("<div class='panel'><h3>Monitoring schedule</h3><dl class='kv'>"
-            "<dt>Check interval</dt><dd>Every " + str(interval_min) + " minutes</dd>"
+            "<dt>Check interval</dt><dd>Every " + str(interval_min) + " minute" + ("" if interval_min == 1 else "s") + "</dd>"
             "<dt>Last check</dt><dd class='mono'>" + ts(facts["last"]) + "</dd>"
             "<dt>Next check</dt><dd class='mono'>" + ts(facts["next"]) + "</dd>"
             "<dt>Checks today</dt><dd>" + "{:,}".format(facts["today"]) + "</dd>"

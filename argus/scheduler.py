@@ -220,11 +220,24 @@ class Scheduler:
         log.info("scheduler started — interval %ds, %d resolvers, %d domains",
                  interval, len(self.settings.enabled_resolvers), len(self.settings.watchlist))
         while not self._stop.is_set():
+            started = time.monotonic()
             try:
                 self.run_once()
             except Exception:  # noqa: BLE001 - a bad sweep must not end the loop
                 log.exception("sweep failed; continuing")
-            self._stop.wait(timeout=interval)      # wakes immediately on stop()
+            # Cadence is measured start-to-start, not end-to-start: the next
+            # cycle begins `interval` after this one began, so "every 60s" means
+            # every 60s. Only the time left after the sweep is waited out.
+            remaining = interval - (time.monotonic() - started)
+            if remaining > 0:
+                self._stop.wait(timeout=remaining)     # wakes immediately on stop()
+            else:
+                log.warning("a full cycle took %.0fs, longer than the %ds "
+                            "interval; the next cycle starts immediately. To keep "
+                            "up, reduce enabled resolvers or domains, or lower the "
+                            "query timeout -- unreachable resolvers spend the "
+                            "timeout on every query.",
+                            interval - remaining, interval)
         log.info("scheduler stopped cleanly")
 
     def stop(self) -> None:
