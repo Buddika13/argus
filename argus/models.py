@@ -122,6 +122,11 @@ class MonitoredResolver:
     country: str = "unknown"
     port: int = 53
     enabled: bool = True
+    # Whether this resolver's address has been locally verified from the
+    # monitoring vantage (a real dig against it succeeded), as opposed to being
+    # a candidate taken from a third-party public directory. Kept honest in the
+    # research: a candidate is monitored but labelled unverified until confirmed.
+    verified: bool = False
     # Optional position on the national map, as percentages of the outline's
     # bounding box. Left unset unless the operator supplies a real location:
     # the dashboard draws no marker rather than inventing one.

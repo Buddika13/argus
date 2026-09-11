@@ -146,6 +146,7 @@ def load_resolvers(path: Path) -> list[MonitoredResolver]:
             country=entry.get("country", "unknown"),
             port=int(entry.get("port", 53)),
             enabled=bool(entry.get("enabled", True)),
+            verified=bool(entry.get("verified", False)),
             map_x=_coord(entry.get("map_x")),
             map_y=_coord(entry.get("map_y")),
         ))

@@ -49,6 +49,7 @@ def resolver_summaries(storage) -> list[dict]:
         out.append({
             "name": r["name"], "ip": r["address"], "role": r["role"],
             "isp": r["isp"], "enabled": r["enabled"],
+            "verified": bool(r["verified"]) if "verified" in r.keys() else False,
             "status": resolver_status(health),
             "availability": health["availability_pct"] if health else None,
             "latency": health["avg_latency_ms"] if health else None,
@@ -472,10 +473,15 @@ def overview(storage, live: bool) -> str:
         tone = status_tone(x["status"])
         correctness = (x["correctness"] * 100
                        if isinstance(x["correctness"], (int, float)) else None)
+        tag = ("" if x["role"] == "control" or x["status"] == NO_DATA
+               else (" <span class='chip' style='background:var(--okbg);"
+                     "color:var(--ok)'>VERIFIED</span>" if x["verified"]
+                     else " <span class='chip' style='background:var(--warnbg);"
+                     "color:var(--warn)'>CANDIDATE</span>"))
         rowsout += ("<tr" + dim + "><td><a href='"
                     + link("resolvers", live, "?resolver=" + x["name"])
                     + "'><b>" + e(x["name"]) + "</b></a> <span class='chip'>"
-                    + e((x["role"] or "").upper()) + "</span></td>"
+                    + e((x["role"] or "").upper()) + "</span>" + tag + "</td>"
                     "<td class='mono'>" + e(x["ip"]) + "</td>"
                     "<td><span class='st " + tone + "'>"
                     "<span class='statusdot'></span>" + e(x["status"])

@@ -41,12 +41,13 @@ from .models import (Alert, Anomaly, AuthoritativeAnswer, ComparisonResult,
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS resolvers (
-    name    TEXT PRIMARY KEY,
-    address TEXT NOT NULL,
-    role    TEXT,
-    isp     TEXT,
-    country TEXT,
-    enabled INTEGER DEFAULT 1
+    name     TEXT PRIMARY KEY,
+    address  TEXT NOT NULL,
+    role     TEXT,
+    isp      TEXT,
+    country  TEXT,
+    enabled  INTEGER DEFAULT 1,
+    verified INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS domains (
@@ -261,6 +262,11 @@ class Storage:
                 self._conn.execute(
                     "ALTER TABLE authoritative_results ADD COLUMN %s %s"
                     % (column, decl))
+        resolver_cols = {row[1] for row in
+                         self._conn.execute("PRAGMA table_info(resolvers)")}
+        if "verified" not in resolver_cols:
+            self._conn.execute(
+                "ALTER TABLE resolvers ADD COLUMN verified INTEGER DEFAULT 0")
         # A view is a stored query, not data: dropping and recreating it is safe
         # and is the only way to pick up columns added above.
         self._conn.execute("DROP VIEW IF EXISTS monitoring_events")
@@ -269,11 +275,13 @@ class Storage:
     # -- reference data ---------------------------------------------------
     def upsert_resolver(self, r: MonitoredResolver) -> None:
         self._conn.execute(
-            "INSERT INTO resolvers (name, address, role, isp, country, enabled) "
-            "VALUES (?,?,?,?,?,?) "
+            "INSERT INTO resolvers (name, address, role, isp, country, enabled, verified) "
+            "VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT(name) DO UPDATE SET address=excluded.address, role=excluded.role, "
-            "isp=excluded.isp, country=excluded.country, enabled=excluded.enabled",
-            (r.name, r.address, r.role, r.isp, r.country, int(r.enabled)),
+            "isp=excluded.isp, country=excluded.country, enabled=excluded.enabled, "
+            "verified=excluded.verified",
+            (r.name, r.address, r.role, r.isp, r.country, int(r.enabled),
+             int(getattr(r, "verified", False))),
         )
         self._conn.commit()
 

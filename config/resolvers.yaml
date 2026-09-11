@@ -9,34 +9,113 @@
 # handed out by that ISP at your vantage point, then set `enabled: true`.
 
 resolvers:
-  # --- Sri Lankan ISPs (fill in real addresses, then enable) -------------
-  - name: slt
-    address: 192.0.2.11        # REPLACE with SLT's resolver IP
+  # --- Sri Lankan ISP resolvers -----------------------------------------
+  # Candidate real addresses from the Public DNS directory for Sri Lanka
+  # (publicdns.info/country/lk.html, consulted Sep 2026). They are ENABLED so
+  # ARGUS monitors them, but verified:false marks them as not yet confirmed
+  # from this vantage. Run  dig @<ip> google.com A  from the monitoring host;
+  # when it answers correctly, set verified:true. A candidate that does not
+  # answer will show ERROR (unreachable / closed), which is a real result.
+  - name: slt-1
+    address: 124.43.208.179
     role: isp
     isp: SLT
     country: LK
-    enabled: false
+    enabled: true
+    verified: false
 
-  - name: mobitel
-    address: 192.0.2.12        # REPLACE with Mobitel's resolver IP
+  - name: slt-2
+    address: 124.43.208.180
     role: isp
-    isp: Mobitel
+    isp: SLT
     country: LK
-    enabled: false
+    enabled: true
+    verified: false
 
-  - name: dialog
-    address: 192.0.2.13        # REPLACE with Dialog's resolver IP
+  - name: dialog-1
+    address: 122.255.3.98
     role: isp
     isp: Dialog
     country: LK
-    enabled: false
+    enabled: true
+    verified: false
 
-  - name: hutch
-    address: 192.0.2.14        # REPLACE with Hutch's resolver IP
+  - name: dialog-2
+    address: 122.255.41.211
     role: isp
-    isp: Hutch
+    isp: Dialog
+    country: LK
+    enabled: true
+    verified: false
+
+  - name: mobitel-1
+    address: 124.6.249.132
+    role: isp
+    isp: Mobitel
+    country: LK
+    enabled: true
+    verified: false
+
+  - name: mobitel-2
+    address: 124.6.249.133
+    role: isp
+    isp: Mobitel
+    country: LK
+    enabled: true
+    verified: false
+
+  # Lanka Communication Services — additional public candidates (status OK).
+  - name: lcs-1
+    address: 203.143.18.137
+    role: isp
+    isp: Lanka Communication Services
+    country: LK
+    enabled: true
+    verified: false
+
+  - name: lcs-2
+    address: 103.1.179.24
+    role: isp
+    isp: Lanka Communication Services
+    country: LK
+    enabled: true
+    verified: false
+
+  - name: lcs-3
+    address: 203.143.15.169
+    role: isp
+    isp: Lanka Communication Services
+    country: LK
+    enabled: true
+    verified: false
+
+  - name: lcs-4
+    address: 116.12.74.17
+    role: isp
+    isp: Lanka Communication Services
+    country: LK
+    enabled: true
+    verified: false
+
+  # Flagged NXDOMAIN-hijack by the source directory. NXDOMAIN hijacking (an ISP
+  # answering a non-existent name with its own page) is a real finding but not
+  # the same as cache poisoning, so these are kept DISABLED until investigated
+  # deliberately. Enable one to demonstrate detection of that behaviour.
+  - name: lcs-nx-1
+    address: 203.143.20.11
+    role: isp
+    isp: Lanka Communication Services
     country: LK
     enabled: false
+    verified: false
+
+  - name: lcs-nx-2
+    address: 103.1.179.167
+    role: isp
+    isp: Lanka Communication Services
+    country: LK
+    enabled: false
+    verified: false
 
   # --- public control resolvers (safe to run by default) ----------------
   - name: google
