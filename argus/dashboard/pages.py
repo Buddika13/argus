@@ -459,8 +459,8 @@ def overview(storage, live: bool) -> str:
                 "Resolvers responding", link("resolvers", live))
     body += kpi("info", KPI_ICONS["domains"], str(_watchlist_size(storage)),
                 "Domains monitored", link("queries", live))
-    body += kpi("info", KPI_ICONS["domains"], str(_tld_count(storage)),
-                "TLDs covered", link("domains", live))
+    body += kpi("warn" if anomalies else "muted", KPI_ICONS["anomalies"],
+                str(anomalies), "Anomalies investigated", link("anomalies", live))
     body += kpi("bad" if alerts else "ok", KPI_ICONS["uptime"], str(alerts),
                 "Possible poisoning events", link("poisoning", live))
     body += "</div>"
