@@ -1,0 +1,118 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>How ARGUS Works</title>
+<style>
+  body{font-family:"Calibri","Segoe UI",Arial,sans-serif;font-size:11.5pt;
+    color:#1a1a1a;line-height:1.5;margin:2.5cm}
+  h1{font-size:20pt;color:#0f2942;margin:0 0 2pt}
+  .sub{font-size:11pt;color:#4a5a6a;font-style:italic;margin:0 0 18pt}
+  h2{font-size:13pt;color:#1f5c96;border-bottom:1.5pt solid #1f5c96;
+    padding-bottom:3pt;margin:18pt 0 8pt}
+  p{margin:0 0 8pt}
+  table{border-collapse:collapse;width:100%;margin:6pt 0 10pt;font-size:10.5pt}
+  th,td{border:0.75pt solid #c9d2dc;padding:5pt 8pt;text-align:left;
+    vertical-align:top}
+  th{background:#eaf1f8;color:#0f2942;font-weight:bold}
+  code{font-family:"Consolas","Courier New",monospace;background:#f0f3f6;
+    padding:1pt 4pt;font-size:10pt}
+  .cmd{font-family:"Consolas","Courier New",monospace;background:#0f2942;
+    color:#eaf1f8;padding:8pt 10pt;font-size:10pt;margin:4pt 0}
+  .note{border-left:3pt solid #96620d;background:#f6ecd8;padding:8pt 12pt;
+    margin:10pt 0;font-size:10.5pt}
+  ul{margin:4pt 0 8pt 0}
+  li{margin:0 0 4pt}
+  .foot{margin-top:24pt;padding-top:8pt;border-top:1pt solid #c9d2dc;
+    font-size:9.5pt;color:#6a7684}
+</style>
+</head>
+<body>
+
+<h1>ARGUS &mdash; How the System Works</h1>
+<p class="sub">National DNS Caching-Server Health &amp; Cache-Poisoning Monitoring System</p>
+
+<h2>1. What ARGUS does</h2>
+<p>Every ISP and organisation runs a <b>caching DNS resolver</b>. A cache can be
+<b>poisoned</b> &mdash; an attacker plants a wrong address in it, so everyone
+using that resolver is sent to the wrong place. ARGUS is a monitoring system
+that watches these resolvers, from one central machine, every minute, and
+reports whether any of them is serving a hijacked answer.</p>
+<p>ARGUS is <b>not</b> a DNS server. It holds no cache and has no users &mdash; it
+is a measuring instrument pointed at other resolvers.</p>
+
+<h2>2. How it detects a hijack &mdash; the two paths</h2>
+<p>For each domain, ARGUS resolves the same name twice and compares:</p>
+<table>
+  <tr><th>Path</th><th>Command</th><th>Meaning</th></tr>
+  <tr><td><b>Untrusted</b></td><td><code>dig @&lt;resolver&gt; &lt;domain&gt;</code></td>
+      <td>What the monitored cache claims. Never trusted.</td></tr>
+  <tr><td><b>Trusted</b></td><td><code>dig +trace &lt;domain&gt;</code></td>
+      <td>Walked from the root &rarr; TLD &rarr; authoritative server. This is
+          the true answer (ground truth).</td></tr>
+</table>
+<p>ARGUS compares the two answers <b>as sets of IP addresses</b> (a domain may
+have several addresses for load balancing, which is normal).</p>
+
+<h2>3. The four possible results</h2>
+<table>
+  <tr><th>Result</th><th>Meaning</th></tr>
+  <tr><td><b>MATCH</b></td><td>The resolver's addresses equal the trusted answer. Healthy.</td></tr>
+  <tr><td><b>PARTIAL</b></td><td>A subset &mdash; usually load balancing, not an attack.</td></tr>
+  <tr><td><b>MISMATCH</b></td><td>The resolver returned an address the zone never published &mdash; the fingerprint of poisoning.</td></tr>
+  <tr><td><b>ERROR</b></td><td>The resolver did not answer (timeout / unreachable). Not a hijack.</td></tr>
+</table>
+<p class="note"><b>Careful terminology:</b> ARGUS never calls a mismatch
+"confirmed poisoning". A difference is investigated through six checks (a second
+independent walk, cross-check resolvers, DNSSEC, and repetition) before it is
+reported as <b>POSSIBLE cache poisoning</b> &mdash; possible, never proven,
+because a passive observer cannot obtain proof.</p>
+
+<h2>4. How it runs &mdash; centralised, every minute</h2>
+<p>One central machine runs a <b>sweep</b> every 60 seconds: for each enabled
+resolver and each watched domain, it performs the two paths above, compares
+them, stores the result, and raises an alert if the evidence supports one. All
+results are written to one local database (SQLite).</p>
+
+<h2>5. The nine pages</h2>
+<table>
+  <tr><th>Page</th><th>Shows</th></tr>
+  <tr><td>Dashboard</td><td>Overall status: resolvers, domains, findings, response-time chart, national map, schedule.</td></tr>
+  <tr><td>Resolvers</td><td>Health of each monitored resolver (verified vs candidate).</td></tr>
+  <tr><td>Domains</td><td>The watch-list and how each domain behaved.</td></tr>
+  <tr><td>Monitoring</td><td>Run a live check on one domain &mdash; the two paths side by side.</td></tr>
+  <tr><td>Results</td><td>Every measurement, searchable, with MATCH / MISMATCH / ERROR.</td></tr>
+  <tr><td>Alerts</td><td>Findings by severity, with the full evidence for each.</td></tr>
+  <tr><td>Reports</td><td>Generate PDF, CSV or Excel reports from real data.</td></tr>
+  <tr><td>Settings</td><td>The configuration in force.</td></tr>
+  <tr><td>Help</td><td>How detection works, in plain terms.</td></tr>
+</table>
+<p>All nine pages read from the <b>same database</b>. A check made by the engine,
+or run by hand on the Monitoring page, immediately appears on Results, the
+Dashboard, Alerts and Reports.</p>
+
+<h2>6. How to start it</h2>
+<p>Two programs share one database: one collects data, one shows it.</p>
+<p><b>Collect data continuously (every minute):</b></p>
+<div class="cmd">.venv/bin/python -m argus serve</div>
+<p><b>Show the website</b> (in a second terminal), then open a browser at
+<code>127.0.0.1:8080</code>:</p>
+<div class="cmd">.venv/bin/python -m argus dashboard</div>
+<p><b>Run one check immediately</b> (no waiting):</p>
+<div class="cmd">.venv/bin/python -m argus run-once</div>
+
+<h2>7. Current status</h2>
+<ul>
+  <li>The engine, the two-path comparison and the nine-page interface are built and working.</li>
+  <li>It monitors 5 real global resolvers (Google, Cloudflare, Quad9, OpenDNS, Verisign) plus <b>10 real Sri Lankan resolver candidates</b> (SLT, Dialog, Mobitel, Lanka Communication Services).</li>
+  <li>The Sri Lankan resolvers are marked <b>candidate</b> (from a public directory) until confirmed reachable from the monitoring machine, at which point they become <b>verified</b>.</li>
+  <li>Planned next steps: query every authoritative nameserver for agreement, and DNSSEC-validate the trusted walk itself &mdash; the "sophistication" hardening.</li>
+</ul>
+
+<p class="foot">ARGUS v1.0 &middot; Department of Computer Science, Sri Lanka.
+All figures on the dashboard are real measurements from the system's own
+database; no data is fabricated. &ldquo;Monitor the DNS. Secure the future.&rdquo;</p>
+
+</body>
+</html>
