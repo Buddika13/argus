@@ -1,0 +1,219 @@
+# ARGUS — domain watchlist (docs/METHODOLOGY.md §5.2)
+#
+# Replaces the older flat `config/watchlist.txt`, which is still read as a
+# fallback so nothing breaks if this file is absent.
+#
+# Scope: this is a measurement study of the public caching DNS resolvers used in
+# SRI LANKA, so most of the list is Sri Lankan infrastructure whose compromise
+# would affect Sri Lankan users. A smaller international set is kept
+# deliberately: it exercises delegation through many different top-level
+# domains, and it acts as a control group — a resolver that misbehaves only on
+# .lk names is a materially different finding from one that misbehaves
+# everywhere.
+#
+# ---------------------------------------------------------------------------
+# On list size
+# ---------------------------------------------------------------------------
+# The methodology (§5.2) asks for a fixed 4-6 domain list so results stay
+# comparable across runs. This file keeps the full measured set AND satisfies
+# that requirement, via the `core: true` tag: the six core domains are the
+# stable, comparable spine reported in the dissertation's headline tables, and
+# the remainder provide breadth. Report per-tier results over the core set for
+# run-to-run comparability, and over the full set for coverage.
+#
+#   Core selection rationale (one per requirement in §5.2):
+#     .lk      -> cbsl.gov.lk, slt.lk     (national, non-CDN, stable)
+#     .com     -> cloudflare.com          (DNSSEC-signed, small stable set)
+#     .org     -> iana.org                (DNSSEC-signed, registry-grade)
+#     .net     -> ripe.net                (DNSSEC-signed)
+#     unsigned -> nsbm.ac.lk              (unsigned counterpart, §5.2)
+#
+# ---------------------------------------------------------------------------
+# On the `dnssec_expected` field
+# ---------------------------------------------------------------------------
+# It is a WATCHLIST-DESIGN HINT, never an assertion and never an input to a
+# verdict. Signedness is determined at measurement time by argus/dnssec.py, and
+# the measured value is what is stored and reported. The field exists only so a
+# reader can see that the list deliberately spans signed and unsigned zones as
+# §5.2 requires. Permitted values: signed | unsigned | unknown.
+#
+# Every domain below was checked against the authoritative hierarchy AND against
+# all five control resolvers before inclusion. Candidates that diverged, or
+# whose delegation could not be walked, are recorded under `excluded:` at the
+# foot of this file with the measurement that excluded them, rather than being
+# silently dropped.
+
+domains:
+  # --- Sri Lanka: banking and financial ----------------------------------
+  - name: peoplesbank.lk
+    category: banking
+    dnssec_expected: unknown
+  - name: sampath.lk
+    category: banking
+    dnssec_expected: unknown
+  - name: hnb.lk
+    category: banking
+    dnssec_expected: unknown
+
+  # --- Sri Lanka: regulator and government --------------------------------
+  - name: cbsl.gov.lk
+    category: government
+    core: true
+    dnssec_expected: unknown
+    note: >-
+      Central Bank. Core .lk subject: national financial regulator, not behind a
+      content delivery network, so a divergence is meaningful rather than
+      geographic noise.
+  - name: gov.lk
+    category: government
+    dnssec_expected: unknown
+  - name: treasury.gov.lk
+    category: government
+    dnssec_expected: unknown
+  - name: ird.gov.lk
+    category: government
+    dnssec_expected: unknown
+  - name: health.gov.lk
+    category: government
+    dnssec_expected: unknown
+  - name: parliament.lk
+    category: government
+    dnssec_expected: unknown
+
+  # --- Sri Lanka: utilities and public services ---------------------------
+  - name: ceb.lk
+    category: utilities
+    dnssec_expected: unknown
+  - name: police.lk
+    category: utilities
+    dnssec_expected: unknown
+
+  # --- Sri Lanka: telecommunications --------------------------------------
+  - name: slt.lk
+    category: telecom
+    core: true
+    dnssec_expected: unknown
+    note: >-
+      Core .lk subject. An ISP's own domain is a useful check: a resolver
+      answering incorrectly for its operator's own name is a strong signal.
+  - name: dialog.lk
+    category: telecom
+    dnssec_expected: unknown
+
+  # --- Sri Lanka: education ------------------------------------------------
+  - name: nsbm.ac.lk
+    category: education
+    core: true
+    dnssec_expected: unsigned
+    note: >-
+      Core UNSIGNED counterpart required by methodology §5.2, so the watchlist
+      spans both DNSSEC postures. Confirm the measured value before reporting.
+  - name: uom.lk
+    category: education
+    dnssec_expected: unknown
+
+  # --- International: top-level domain breadth -----------------------------
+  # Registry and standards-body domains, one per TLD. Chosen because they
+  # publish small stable address sets and are not behind content delivery
+  # networks, so a difference is meaningful rather than geographic noise.
+  - name: cloudflare.com
+    category: international
+    core: true
+    dnssec_expected: signed
+    note: Core .com subject and a signed zone (methodology §5.2).
+  - name: iana.org
+    category: international
+    core: true
+    dnssec_expected: signed
+    note: Core .org subject and a signed zone (methodology §5.2).
+  - name: ripe.net
+    category: international
+    core: true
+    dnssec_expected: signed
+    note: Core .net subject and a signed zone (methodology §5.2).
+  - name: nist.gov
+    category: international
+    dnssec_expected: signed
+  - name: who.int
+    category: international
+    dnssec_expected: unknown
+  - name: nominet.uk
+    category: international
+    dnssec_expected: signed
+  - name: denic.de
+    category: international
+    dnssec_expected: signed
+  - name: jprs.jp
+    category: international
+    dnssec_expected: unknown
+  - name: registry.in
+    category: international
+    dnssec_expected: unknown
+  - name: afnic.fr
+    category: international
+    dnssec_expected: signed
+  - name: registro.br
+    category: international
+    dnssec_expected: signed
+  - name: cira.ca
+    category: international
+    dnssec_expected: signed
+
+# ---------------------------------------------------------------------------
+# Deliberately NOT monitored, with the measurement that excluded each.
+#
+# Kept in version control on purpose: methodology §16 (reproducibility) and the
+# exclusion discipline of §9 both depend on the reader being able to see what
+# was removed and why. ARGUS never reads this section; it is documentation.
+# ---------------------------------------------------------------------------
+excluded:
+  # Geo-variable (content delivery networks). These resolve to CDN edges that
+  # differ per resolver location, which a set comparison correctly reports as
+  # divergence-shaped. Under methodology §9 stage 1 they are Tier 1 (benign,
+  # GeoDNS-explained), not findings — so they are excluded to keep the measured
+  # set interpretable rather than relying on the exclusion gate every run.
+  - name: google.com
+    reason: >-
+      GeoDNS/CDN. Produced false positives in the recorded experiment.
+  - name: microsoft.com
+    reason: >-
+      GeoDNS/CDN. Produced false positives in the recorded experiment.
+  - name: www.boc.lk
+    reason: >-
+      CloudFront. Quad9 and AdGuard returned a different edge than the zone
+      published.
+  - name: boc.lk
+    reason: >-
+      CloudFront. Quad9 and AdGuard returned a different edge than the zone
+      published.
+  - name: nic.lk
+    reason: >-
+      CloudFront. Quad9 and AdGuard returned a different edge than the zone
+      published.
+  - name: mit.edu
+    reason: >-
+      Akamai. OpenDNS and Level3 diverged. A single-resolver check had passed
+      it, which is why every candidate is now tested against all five controls
+      before being added.
+
+  # Delegation could not be walked, or no A records published.
+  - name: combank.lk
+    reason: Delegation could not be walked, or no A records published.
+  - name: nwsdb.lk
+    reason: Delegation could not be walked, or no A records published.
+  - name: army.lk
+    reason: Delegation could not be walked, or no A records published.
+  - name: pdn.ac.lk
+    reason: Delegation could not be walked, or no A records published.
+
+# ---------------------------------------------------------------------------
+# DNSSEC validation probes (methodology §7).
+#
+# These are NOT watchlist subjects and are never compared against ground truth.
+# They are the signed / deliberately-broken pair used to test whether a resolver
+# validates. Configured in config/config.yaml under `dnssec:`; repeated here so
+# the watchlist documents the full measured surface in one place.
+#   signed_zone: dnssec-tools.org     AD set      => resolver validated
+#   broken_zone: dnssec-failed.org    SERVFAIL    => resolver validates
+#                                     NOERROR+ans => resolver does NOT validate
+# ---------------------------------------------------------------------------

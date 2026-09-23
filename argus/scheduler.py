@@ -5,9 +5,16 @@ against the same authoritative snapshot):
 
     1. resolve every (domain, record type) via the authoritative walk
     2. for each enabled resolver x domain x record type:
-         query the resolver -> compare -> build a health record -> store
-         if the comparison needs review: record an anomaly
+         query the resolver -> compare -> run the signal modules (§7)
+         -> assign a Tier 0-6 verdict through the exclusion hierarchy (§8, §9)
+         -> build a health record -> store
+         if the verdict is a divergence: record an anomaly, and alert on §10.4
     3. per resolver: aggregate raw health metrics -> store
+
+Query budget (§15). Ground truth is walked once per (domain, record type) and
+shared across resolvers, and the network-facing signal modules run ONLY for an
+observation that actually diverges. A clean answer costs exactly one query, so
+adding the modules did not change the load ARGUS places on a healthy resolver.
 
 Resilience (requirement 10): every individual probe is wrapped, so one failing
 resolver, domain or query never stops the sweep. A failed sweep in run_forever
@@ -30,9 +37,12 @@ from .comparison import compare
 from .config import Settings
 from .dnssec import DnssecInspector
 from .integrity import build_record, compute_metrics
-from .models import Alert, Anomaly, Classification, DnssecStatus
+from .models import Alert, Anomaly, Classification, DnssecStatus, ModuleResult
+from .modules import (check_bailiwick, check_cache_state, check_consensus,
+                      check_ecs, check_ttl)
 from .probe import ResolverProbe
 from .storage import Storage
+from .verdict import assign_tier
 from .verification import AnomalyVerifier
 from .verifier import AuthoritativeVerifier
 
@@ -63,6 +73,11 @@ class Scheduler:
             controls=[r for r in settings.resolvers if r.role == "control"],
             repetitions=max(2, settings.verification.get("persistence", 2)),
         )
+        # Signal-module configuration (§7). Network-facing modules can be
+        # switched off wholesale or individually; the TTL module is free and
+        # always runs.
+        self.module_config = settings.raw.get("modules", {}) or {}
+        self.modules_enabled = bool(self.module_config.get("enabled", True))
         # Delivers confirmed detections outside the database. Injectable so
         # tests never touch the filesystem or the network.
         self.alert_sink = alert_sink or AlertSink.from_settings(settings)
@@ -74,8 +89,10 @@ class Scheduler:
         domains = self.settings.watchlist
         rtypes = self.settings.query["rtypes"]
         max_ratio = self.settings.freshness["max_ttl_ratio"]
+        # `tiers` is the headline the methodology asks a run to report (§8):
+        # which tiers fired, and how often — not a single aggregate number.
         summary = {"queries": 0, "anomalies": 0, "alerts": 0, "failures": 0,
-                   "resolvers": len(resolvers)}
+                   "resolvers": len(resolvers), "tiers": {}}
 
         if not resolvers or not domains:
             log.warning("nothing to do: %d resolvers, %d domains", len(resolvers), len(domains))
@@ -137,67 +154,105 @@ class Scheduler:
                     try:
                         self._pace()
                         direct = self.probe.query(resolver, domain, rtype)
-                        result = compare(direct, truth[(domain, rtype)], max_ratio)
+                        authoritative = truth[(domain, rtype)]
+                        result = compare(direct, authoritative, max_ratio)
                         qid = self.storage.insert_query_result(direct)
-                        cid = self.storage.insert_comparison(
-                            result, resolver.name, domain, qid,
-                            auth_ids[(domain, rtype)], direct.observed_at)
                         summary["queries"] += 1
-
-                        # A Stage-1 mismatch is only a starting point: run the
-                        # multi-stage verification engine before deciding. This
-                        # is what stops GeoDNS/CDN differences being reported as
-                        # poisoning.
-                        final_class = result.classification
-                        outcome = None
-                        if result.classification.needs_review:
-                            outcome = self.anomaly_verifier.verify(
-                                resolver, direct, truth[(domain, rtype)], result)
-                            final_class = outcome.classification
-
-                        record = build_record(resolver, direct, result, final_class)
-                        records.append(record)
 
                         # DNSSEC status (reuses this response's AD flag; one
                         # row per (resolver, domain), recorded on the A query).
+                        # Computed BEFORE the verdict because Tier 6 — the only
+                        # conclusive claim ARGUS makes — depends on it.
+                        dnssec_status = None
                         if self.dnssec and rtype == "A":
                             if domain not in signed_cache:
                                 signed_cache[domain] = self.dnssec.is_signed(domain)
                             signed = signed_cache[domain]
                             security, supports, detail = self.dnssec.assess(
                                 domain, signed, posture, direct.authenticated, direct.rcode)
-                            self.storage.insert_dnssec_status(DnssecStatus(
+                            dnssec_status = DnssecStatus(
                                 domain=domain, resolver=resolver.name, signed=signed,
                                 posture=posture, security=security, ad_flag=direct.authenticated,
                                 supports_anomaly=supports, detail=detail,
-                                observed_at=direct.observed_at))
+                                observed_at=direct.observed_at)
+                            self.storage.insert_dnssec_status(dnssec_status)
+
+                        # A Stage-1 mismatch is only a starting point: run the
+                        # multi-stage verification engine before deciding. This
+                        # is what stops GeoDNS/CDN differences being reported as
+                        # poisoning.
+                        outcome = None
+                        persistent = None
+                        peers: dict = {}
+                        if result.classification.needs_review:
+                            outcome = self.anomaly_verifier.verify(
+                                resolver, direct, authoritative, result)
+                            stage5 = outcome.evidence.get("stage5_persistence") or {}
+                            persistent = stage5.get("persistent")
+                            # Reuse the control answers the verifier already
+                            # collected rather than querying them a second time.
+                            stage3 = outcome.evidence.get("stage3_controls") or {}
+                            peers = {name: frozenset(recs) for name, recs
+                                     in (stage3.get("answers") or {}).items()}
+
+                        # §7 signal modules, then the §8/§9 verdict.
+                        modules = self._run_modules(
+                            resolver, direct, authoritative, result, peers,
+                            max_ratio, diverged=outcome is not None)
+                        verdict = assign_tier(
+                            result, modules=modules, direct=direct,
+                            authoritative=authoritative, dnssec=dnssec_status,
+                            persistent=persistent)
+                        final_class = verdict.classification
+
+                        cid = self.storage.insert_comparison(
+                            result, resolver.name, domain, qid,
+                            auth_ids[(domain, rtype)], direct.observed_at, verdict)
+                        summary["tiers"][int(verdict.tier)] =                             summary["tiers"].get(int(verdict.tier), 0) + 1
+
+                        record = build_record(resolver, direct, result, final_class)
+                        records.append(record)
 
                         if outcome is not None and final_class.needs_review:
+                            # Store the stage evidence AND the tier audit trail
+                            # together: §16 asks that a finding be defensible
+                            # from storage alone, without re-measuring.
+                            evidence = dict(outcome.evidence)
+                            evidence["verdict"] = verdict.as_evidence()
                             anomaly = Anomaly(record=record, classification=final_class,
-                                              state=outcome.state, reason=outcome.reason,
-                                              checks=outcome.evidence, observed_at=direct.observed_at)
+                                              state=outcome.state, reason=verdict.reason,
+                                              checks=evidence, observed_at=direct.observed_at)
                             anomaly_id = self.storage.insert_anomaly(anomaly, cid)
                             summary["anomalies"] += 1
-                            log.info("anomaly: %s %s/%s -> %s", resolver.name, domain, rtype,
-                                     final_class.value)
+                            log.info("anomaly: %s %s/%s -> Tier %d (%s)",
+                                     resolver.name, domain, rtype,
+                                     int(verdict.tier), verdict.tier.label)
 
-                            if final_class is Classification.POSSIBLE_CACHE_POISONING:
+                            # §10.4: emit alerts and evidence for a divergence
+                            # that survived every gate. Tiers 4-5 are worded as
+                            # suggestive; only Tier 6 is stated as tampering.
+                            if verdict.tier.is_divergence:
                                 persisted = outcome.evidence.get(
                                     "stage5_persistence", {}).get("successful", 1)
                                 alert = Alert(anomaly=anomaly, targeted=True,
-                                              persisted_count=persisted, evidence=outcome.evidence,
-                                              confirmed_at=direct.observed_at)
+                                              persisted_count=persisted, evidence=evidence,
+                                              confirmed_at=direct.observed_at,
+                                              tier=verdict.tier)
                                 self.storage.insert_alert(alert, anomaly_id)
                                 summary["alerts"] += 1
                                 # Deliver outside the database. Never allowed to
                                 # affect the sweep: losing a notification is bad,
                                 # losing the measurement is worse.
                                 try:
-                                    self.alert_sink.send(alert, outcome.evidence)
+                                    self.alert_sink.send(alert, evidence)
                                 except Exception:  # noqa: BLE001
                                     log.exception("alert delivery failed")
-                                log.warning("POSSIBLE cache poisoning: %s %s/%s",
-                                            resolver.name, domain, rtype)
+                                log.warning(
+                                    "Tier %d %s: %s %s/%s — %s",
+                                    int(verdict.tier), verdict.tier.label,
+                                    resolver.name, domain, rtype,
+                                    "SUGGESTIVE, not proven" if verdict.suggestive
+                                    else "conclusive")
                     except Exception:  # noqa: BLE001 - one bad query must not stop the sweep
                         summary["failures"] += 1
                         log.exception("probe failed: %s %s/%s", resolver.name, domain, rtype)
@@ -208,10 +263,74 @@ class Scheduler:
                 metrics = compute_metrics(resolver.name, records)
                 self.storage.insert_health_metrics(metrics, time.time())
 
-        log.info("sweep done in %.1fs — %d queries, %d anomalies, %d failures",
-                 time.time() - started, summary["queries"], summary["anomalies"],
-                 summary["failures"])
+        tiers = ", ".join("T%d=%d" % (t, n)
+                          for t, n in sorted(summary["tiers"].items())) or "none"
+        log.info("sweep done in %.1fs — %d queries, %d anomalies, %d failures; "
+                 "tiers: %s", time.time() - started, summary["queries"],
+                 summary["anomalies"], summary["failures"], tiers)
         return summary
+
+    # -- signal modules (§7) ----------------------------------------------
+    def _run_modules(self, resolver, direct, authoritative, comparison,
+                     peers: dict, max_ratio: float,
+                     diverged: bool) -> "dict[str, ModuleResult]":
+        """Run the signal modules for one observation.
+
+        Two tiers of cost, deliberately separated:
+
+        * **TTL** re-reads measurements already in hand and issues no query, so
+          it runs for every observation and freshness is assessed even on a
+          perfectly clean answer.
+        * **Everything else sends packets.** Those run only when `diverged` —
+          when there is actually a difference that needs explaining. ARGUS is a
+          guest on someone else's resolver (§15); probing a healthy answer five
+          more ways would multiply the load and learn nothing.
+
+        A module that fails is recorded as UNAVAILABLE by the module itself, and
+        an unexpected exception is caught here: a broken signal must degrade one
+        observation, never stop a sweep.
+        """
+        modules: dict = {"ttl": check_ttl(direct.min_ttl, authoritative.ttl,
+                                          max_ratio)}
+
+        # Consensus is free too — it scores control answers the verification
+        # engine has already collected — but it is only meaningful for a
+        # divergence, because there is otherwise no deviation to isolate.
+        if diverged and peers:
+            modules["consensus"] = check_consensus(
+                direct.records, authoritative.records, peers)
+
+        if not (diverged and self.modules_enabled):
+            return modules
+
+        timeout = self.settings.query["timeout_seconds"]
+        domain, rtype = direct.domain, direct.rtype
+        cfg = self.module_config
+
+        def run(name: str, fn) -> None:
+            if not (cfg.get(name, {}) or {}).get("enabled", True):
+                return
+            try:
+                self._pace()
+                modules[name] = fn()
+            except Exception:  # noqa: BLE001 - a signal must never break a sweep
+                log.exception("signal module %s failed: %s %s/%s",
+                              name, resolver.name, domain, rtype)
+
+        # ECS first: it is the gate most likely to explain the difference
+        # outright (§9 stage 1), and a benign explanation makes the structural
+        # probes unnecessary.
+        subnets = (cfg.get("ecs", {}) or {}).get("subnets") or None
+        run("ecs", lambda: check_ecs(
+            resolver.address, domain, rtype,
+            subnets=tuple((s["address"], int(s["prefix"])) for s in subnets)
+            if subnets else None,
+            port=resolver.port, timeout=timeout))
+        run("bailiwick", lambda: check_bailiwick(
+            resolver.address, domain, rtype, port=resolver.port, timeout=timeout))
+        run("snoop", lambda: check_cache_state(
+            resolver.address, domain, rtype, port=resolver.port, timeout=timeout))
+        return modules
 
     # -- continuous loop --------------------------------------------------
     def run_forever(self) -> None:

@@ -34,3 +34,6 @@ reports/
 
 # Design reference images (kept locally, not in the repository).
 reference/
+
+# Scratch copies of documents downloaded while drafting (kept locally).
+leftovers/

@@ -37,6 +37,17 @@ DEFAULTS: dict[str, Any] = {
     },
     "freshness": {"max_ttl_ratio": 1.05},
     "dnssec": {"enabled": True},
+    # Signal modules (docs/METHODOLOGY.md §7). The TTL module is always on: it
+    # re-reads measurements already taken and costs no queries. The rest send
+    # their own probes, so they run ONLY when a divergence needs explaining —
+    # we are a guest on someone else's resolver (§15), and a module that fires
+    # on every clean answer would multiply the query load for nothing.
+    "modules": {
+        "enabled": True,
+        "ecs": {"enabled": True, "subnets": []},
+        "bailiwick": {"enabled": True},
+        "snoop": {"enabled": True},
+    },
     # Where a confirmed detection is delivered, beyond the database.
     "alerting": {"enabled": True, "log_file": "data/alerts.log",
                  "webhook_url": ""},   # inspect DNSSEC posture/signedness during sweeps
@@ -65,6 +76,14 @@ class Settings:
     watchlist: list[str] = field(default_factory=list)
     # domain -> the watch-list section it was listed under.
     categories: dict[str, str] = field(default_factory=dict)
+    # The stable, comparable core (methodology §5.2). Empty when the watch-list
+    # came from the legacy flat file, which has no way to express it.
+    core_domains: set[str] = field(default_factory=set)
+    # domain -> "signed" | "unsigned" | "unknown". A watch-list DESIGN hint
+    # only, recording that the list deliberately spans both DNSSEC postures.
+    # Never an input to a verdict: argus/dnssec.py measures signedness at run
+    # time and the measured value is what is stored and reported.
+    dnssec_expected: dict[str, str] = field(default_factory=dict)
 
     @property
     def vantage(self) -> str:
@@ -114,7 +133,17 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         raw = _deep_merge(DEFAULTS, loaded)
 
-    watchlist = load_watchlist_with_categories(cfg / "watchlist.txt")
+    # The watch-list. config/domains.yaml (methodology §5.2, tagged by category
+    # and marking the comparable core) is preferred; the older flat
+    # config/watchlist.txt remains a fallback so an existing checkout without
+    # the YAML file keeps working unchanged.
+    domains_file = cfg / "domains.yaml"
+    core: set[str] = set()
+    expected: dict[str, str] = {}
+    if domains_file.exists():
+        watchlist, core, expected = load_domains(domains_file)
+    else:
+        watchlist = load_watchlist_with_categories(cfg / "watchlist.txt")
     # The monitoring interval can be overridden from the environment without
     # editing any file: ARGUS_INTERVAL_SECONDS (or MONITOR_INTERVAL_SECONDS) in
     # seconds, floored at 10 so a typo cannot melt the resolvers.
@@ -131,6 +160,8 @@ def load_settings(config_dir: Path | None = None) -> Settings:
         resolvers=load_resolvers(cfg / "resolvers.yaml"),
         watchlist=[name for name, _category in watchlist],
         categories={name: category for name, category in watchlist if category},
+        core_domains=core,
+        dnssec_expected=expected,
     )
 
 
@@ -162,6 +193,40 @@ def load_resolvers(path: Path) -> list[MonitoredResolver]:
             map_y=_coord(entry.get("map_y")),
         ))
     return out
+
+
+def load_domains(path: Path) -> tuple[list[tuple[str, str]], set[str], dict[str, str]]:
+    """Read config/domains.yaml (methodology §5.2).
+
+    Returns `(pairs, core, expected)` where `pairs` is the watch-list as
+    (domain, category) tuples in file order, `core` is the set of domains tagged
+    `core: true` -- the small, stable, comparable spine the methodology asks for
+    -- and `expected` maps each domain to its `dnssec_expected` hint.
+
+    The `excluded:` section is deliberately NOT returned. It is documentation of
+    what was removed and why (methodology §9 and §16); ARGUS never measures it.
+    """
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    seen: set[str] = set()
+    pairs: list[tuple[str, str]] = []
+    core: set[str] = set()
+    expected: dict[str, str] = {}
+
+    for entry in doc.get("domains") or []:
+        # Accept a bare string as well as a mapping, so a hand-edited list of
+        # plain names still loads.
+        if isinstance(entry, str):
+            entry = {"name": entry}
+        name = str(entry.get("name", "")).strip().lower()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        pairs.append((name, _category_of(str(entry.get("category", "")))))
+        if entry.get("core"):
+            core.add(name)
+        expected[name] = str(entry.get("dnssec_expected", "unknown")).strip().lower()
+
+    return pairs, core, expected
 
 
 # "# --- Sri Lanka: banking and financial ----" -> "Banking and financial"

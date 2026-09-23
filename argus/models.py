@@ -77,6 +77,109 @@ class IntegrityTier(str, Enum):
     CONFIRMED = "CONFIRMED"      # Tier 2: possible cache poisoning (verified)
 
 
+class Tier(int, Enum):
+    """The verdict ladder of docs/METHODOLOGY.md §8 — one tier per observation.
+
+    The ladder is MONOTONIC: a higher tier requires the lower conditions to be
+    cleared and demands progressively stronger evidence. Escalation past a bare
+    mismatch is gated by the exclusion hierarchy (§9), which is what makes an
+    ARGUS claim defensible. Reporting discipline (§8): favour under-claiming —
+    Tiers 4-5 are *suggestive*; the word "poisoning" is reserved for Tier 6.
+    """
+
+    CLEAN = 0                     # untrusted set == trusted set; no anomalies
+    BENIGN_EXPLAINED = 1          # differs, but fully explained (GeoDNS/CDN/ECS)
+    HEALTH_ISSUE = 2              # unreachable/SERVFAIL/timeout; integrity unknown
+    FRESHNESS_ANOMALY = 3         # answer matches but TTL/timing is implausible
+    UNEXPLAINED_DIVERGENCE = 4    # survived exclusions; no positive evidence yet
+    CORROBORATED_DIVERGENCE = 5   # Tier 4 + a supporting structural signal
+    CONCLUSIVE_TAMPERING = 6      # positive cryptographic proof
+
+    @property
+    def label(self) -> str:
+        return {
+            0: "Consistent / clean",
+            1: "Benign variation explained",
+            2: "Health issue (integrity unknown)",
+            3: "Freshness / timing anomaly",
+            4: "Unexplained divergence (candidate)",
+            5: "Corroborated divergence",
+            6: "Conclusive tampering",
+        }[int(self)]
+
+    @property
+    def interpretation(self) -> str:
+        return {
+            0: "Healthy, faithful resolver — the expected state.",
+            1: "Reconciled; not suspicious.",
+            2: "A health problem; correctness could not be assessed.",
+            3: "Low-grade signal; likely benign, worth logging.",
+            4: "Anomaly worth investigating — not a poisoning claim.",
+            5: "Strong suggestion; still not cryptographically proven.",
+            6: "Defensible poisoning / integrity-violation claim.",
+        }[int(self)]
+
+    @property
+    def is_divergence(self) -> bool:
+        """Tiers that describe an unexplained integrity divergence (§8)."""
+        return int(self) >= 4
+
+    @property
+    def suggestive_only(self) -> bool:
+        """True where §8 requires the finding be reported as *suggestive*."""
+        return int(self) in (4, 5)
+
+    @property
+    def needs_alert(self) -> bool:
+        """§10.4 — emit alerts/evidence for Tier 2 or Tier >= 4."""
+        return int(self) == 2 or int(self) >= 4
+
+
+class SetRelation(str, Enum):
+    """How the untrusted answer set relates to the trusted one (§4, §11).
+
+    Recorded per observation so a divergence can be characterised by shape, not
+    just flagged. DISJOINT is the strongest divergence.
+    """
+
+    MATCH = "MATCH"            # identical sets
+    SUBSET = "SUBSET"          # resolver returned fewer (load balancing)
+    SUPERSET = "SUPERSET"      # resolver returned everything, plus extras
+    OVERLAP = "OVERLAP"        # partial overlap, each side has records the other lacks
+    DISJOINT = "DISJOINT"      # no overlap at all
+    UNDETERMINED = "UNDETERMINED"   # a side could not be measured
+
+
+class ModuleStatus(str, Enum):
+    """What a signal module (§7) concluded for one observation."""
+
+    CLEAN = "CLEAN"                # ran; nothing notable
+    BENIGN = "BENIGN"              # ran; explains a difference benignly
+    SUSPICIOUS = "SUSPICIOUS"      # ran; a positive signal worth corroborating
+    UNAVAILABLE = "UNAVAILABLE"    # could not run (network, unsupported)
+    SKIPPED = "SKIPPED"            # not applicable to this observation
+
+
+class ExclusionStage(int, Enum):
+    """The five gates of docs/METHODOLOGY.md §9, in order."""
+
+    GEODNS = 1              # rule out geographic variation
+    TIMING = 2              # rule out races / mid-flight TTL expiry
+    ISP_POLICY = 3          # rule out lawful/administrative interception
+    POSITIVE_EVIDENCE = 4   # require cryptographic or structural evidence
+    HONEST_CHARACTERISATION = 5   # report survivors as suggestive, not proven
+
+    @property
+    def label(self) -> str:
+        return {
+            1: "Rule out GeoDNS",
+            2: "Rule out timing artefacts",
+            3: "Rule out ISP policy interception",
+            4: "Require positive evidence",
+            5: "Characterise honestly",
+        }[int(self)]
+
+
 class VerificationState(str, Enum):
     """Where an anomaly sits in the Stage-2 verification process."""
 
@@ -315,6 +418,103 @@ class VerificationOutcome:
 
 
 @dataclass
+class ModuleResult:
+    """What one signal module (docs/METHODOLOGY.md §7) found for an observation.
+
+    Modules never assign a tier and never decide anything on their own; each
+    records a structured result that the verdict engine (§8) weighs. That
+    separation is deliberate — it keeps every escalation traceable to a named
+    module output rather than to logic buried in a probe.
+    """
+
+    module: str                      # "ttl" | "bailiwick" | "consensus" | ...
+    status: ModuleStatus
+    detail: str = ""
+    data: dict = field(default_factory=dict)
+
+    @property
+    def is_positive_evidence(self) -> bool:
+        """§9 stage 4 — does this count as positive structural/crypto evidence?"""
+        return self.status is ModuleStatus.SUSPICIOUS
+
+
+@dataclass
+class ExclusionOutcome:
+    """The result of one gate in the five-stage exclusion hierarchy (§9).
+
+    `passed` means the divergence SURVIVED this gate and may continue up the
+    ladder. A gate that does not pass caps the tier at `capped_at` and records
+    why, so a downgrade is as auditable as an escalation.
+    """
+
+    stage: ExclusionStage
+    passed: bool
+    detail: str = ""
+    capped_at: Optional["Tier"] = None
+
+    @property
+    def label(self) -> str:
+        return self.stage.label
+
+
+@dataclass
+class Verdict:
+    """One observation's tier, plus everything that produced it (§8, §9, §11).
+
+    This is the unit the dissertation reports: a tier, the set relation that
+    shaped it, the module outputs that fed it, and the exclusion gates it did or
+    did not survive. `classification` carries the legacy Classification so the
+    existing storage, dashboard and alerting keep working unchanged.
+    """
+
+    tier: Tier
+    reason: str
+    relation: SetRelation = SetRelation.UNDETERMINED
+    modules: dict[str, ModuleResult] = field(default_factory=dict)
+    exclusions: list[ExclusionOutcome] = field(default_factory=list)
+    classification: Classification = Classification.NORMAL
+
+    @property
+    def suggestive(self) -> bool:
+        return self.tier.suggestive_only
+
+    @property
+    def positive_evidence(self) -> list[str]:
+        """Names of the modules that supplied positive evidence (§9 stage 4)."""
+        return sorted(name for name, m in self.modules.items()
+                      if m.is_positive_evidence)
+
+    def gate(self, stage: ExclusionStage) -> Optional[ExclusionOutcome]:
+        """The recorded outcome for one gate, or None if it did not run."""
+        for outcome in self.exclusions:
+            if outcome.stage is stage:
+                return outcome
+        return None
+
+    def as_evidence(self) -> dict:
+        """A JSON-safe summary for storage and the dashboard's evidence panel."""
+        return {
+            "tier": int(self.tier),
+            "tier_label": self.tier.label,
+            "interpretation": self.tier.interpretation,
+            "reason": self.reason,
+            "relation": self.relation.value,
+            "suggestive": self.suggestive,
+            "positive_evidence": self.positive_evidence,
+            "modules": {
+                name: {"status": m.status.value, "detail": m.detail, "data": m.data}
+                for name, m in self.modules.items()
+            },
+            "exclusions": [
+                {"stage": int(o.stage), "name": o.label, "passed": o.passed,
+                 "detail": o.detail,
+                 "capped_at": int(o.capped_at) if o.capped_at is not None else None}
+                for o in self.exclusions
+            ],
+        }
+
+
+@dataclass
 class Anomaly:
     """Tier-1: a suspicious measurement awaiting Stage-2 verification."""
 
@@ -335,3 +535,33 @@ class Alert:
     persisted_count: int = 1         # consecutive sweeps the anomaly held
     evidence: dict = field(default_factory=dict)
     confirmed_at: float = field(default_factory=time.time)
+    # The methodology §8 tier this alert was raised at. Optional so an Alert
+    # built by older code still constructs; the delivery layer falls back to the
+    # classification when it is absent.
+    tier: Optional["Tier"] = None
+
+    # The identifying facts live on the measurement this alert was raised from.
+    # Exposing them here keeps the delivery layer (alerting.py) and the report
+    # writers from reaching three objects deep for a resolver name.
+    @property
+    def resolver(self) -> str:
+        return self.anomaly.record.resolver
+
+    @property
+    def domain(self) -> str:
+        return self.anomaly.record.domain
+
+    @property
+    def rtype(self) -> str:
+        return self.anomaly.record.rtype
+
+    @property
+    def status(self) -> str:
+        """The headline label a reader sees first.
+
+        The tier is the authority when one was assigned, because it carries the
+        strength of the claim (§8); the classification is the fallback.
+        """
+        if self.tier is not None:
+            return f"TIER_{int(self.tier)}_{self.tier.name}"
+        return self.anomaly.classification.value

@@ -50,6 +50,11 @@ def _settings(resolvers):
         "query": {"timeout_seconds": 1.0, "retries": 0, "rtypes": ["A"]},
         "verification": {"requery": True, "rewalk": True, "control_crosscheck": True, "persistence": 2},
         "freshness": {"max_ttl_ratio": 1.05}, "dnssec": {"enabled": False},
+        # These are offline unit tests against fake resolver addresses. The
+        # network-facing signal modules would sit in timeouts reaching them, so
+        # they are switched off here; tests/test_scheduler_modules.py covers the
+        # wiring with stand-ins instead.
+        "modules": {"enabled": False},
         "storage": {"path": ":memory:"}, "dashboard": {"path": "x.html"},
         "logging": {"level": "CRITICAL"},
     }

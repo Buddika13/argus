@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Optional
 
 from .models import (Alert, Anomaly, AuthoritativeAnswer, ComparisonResult,
-                     DirectAnswer, DnssecStatus, MonitoredResolver, ResolverMetrics)
+                     DirectAnswer, DnssecStatus, MonitoredResolver,
+                     ResolverMetrics, Verdict)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS resolvers (
@@ -103,10 +104,19 @@ CREATE TABLE IF NOT EXISTS comparisons (
     ttl_ratio              REAL,
     ttl_inflated           INTEGER,
     is_anomaly             INTEGER,
-    reason                 TEXT
+    reason                 TEXT,
+    -- The methodology §8 verdict. `tier` is the number the dissertation
+    -- reports; `verdict_json` is the full audit trail behind it (every module
+    -- output and every exclusion gate), so a finding can be re-read and
+    -- defended later without re-running the measurement (§16).
+    tier                   INTEGER,
+    tier_label             TEXT,
+    relation               TEXT,
+    verdict_json           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cmp_time  ON comparisons (observed_at);
 CREATE INDEX IF NOT EXISTS idx_cmp_class ON comparisons (classification);
+CREATE INDEX IF NOT EXISTS idx_cmp_tier  ON comparisons (tier);
 
 CREATE TABLE IF NOT EXISTS health_metrics (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -211,7 +221,10 @@ CREATE VIEW IF NOT EXISTS monitoring_events AS
         c.unpublished              AS unpublished_records,
         c.missing                  AS missing_records,
         c.reason                   AS verification_result,
-        c.is_anomaly               AS anomaly_status
+        c.is_anomaly               AS anomaly_status,
+        c.tier                     AS tier,
+        c.tier_label               AS tier_label,
+        c.relation                 AS set_relation
     FROM query_results q
     LEFT JOIN comparisons c           ON c.query_result_id = q.id
     LEFT JOIN authoritative_results a ON a.id = c.authoritative_result_id;
@@ -245,26 +258,40 @@ class Storage:
 
     def init_schema(self) -> None:
         """Create tables/indexes/view if absent. Idempotent; never destructive."""
-        self._conn.executescript(SCHEMA)
         self._migrate()
         self._conn.commit()
 
+    def _columns(self, table: str) -> set:
+        """The column names of `table`, or an empty set if it does not exist."""
+        return {row[1] for row in
+                self._conn.execute("PRAGMA table_info(%s)" % table)}
+
     def _migrate(self) -> None:
-        """Add columns introduced after a database was first created.
+        """Bring an existing database up to date, then apply the schema.
+
+        Columns introduced after a database was first created are added *before*
+        SCHEMA runs, because SCHEMA indexes them: `idx_cmp_tier` cannot be
+        created while an older `comparisons` table still lacks a `tier` column.
+        On a fresh database every table is absent, each step below is skipped,
+        and SCHEMA creates everything outright.
 
         Only ever ADDs columns and rebuilds the read-only view, so existing rows
         are preserved untouched; older rows simply carry NULL in the new columns.
         """
-        existing = {row[1] for row in
-                    self._conn.execute("PRAGMA table_info(authoritative_results)")}
+        existing = self._columns("authoritative_results")
         for column, decl in (("servers", "TEXT"), ("tld", "TEXT")):
-            if column not in existing:
+            if existing and column not in existing:
                 self._conn.execute(
                     "ALTER TABLE authoritative_results ADD COLUMN %s %s"
                     % (column, decl))
-        resolver_cols = {row[1] for row in
-                         self._conn.execute("PRAGMA table_info(resolvers)")}
-        if "verified" not in resolver_cols:
+        comparison_cols = self._columns("comparisons")
+        for column, decl in (("tier", "INTEGER"), ("tier_label", "TEXT"),
+                             ("relation", "TEXT"), ("verdict_json", "TEXT")):
+            if comparison_cols and column not in comparison_cols:
+                self._conn.execute(
+                    "ALTER TABLE comparisons ADD COLUMN %s %s" % (column, decl))
+        resolver_cols = self._columns("resolvers")
+        if resolver_cols and "verified" not in resolver_cols:
             self._conn.execute(
                 "ALTER TABLE resolvers ADD COLUMN verified INTEGER DEFAULT 0")
         # A view is a stored query, not data: dropping and recreating it is safe
@@ -318,14 +345,32 @@ class Storage:
     def insert_comparison(self, c: ComparisonResult, resolver: str, domain: str,
                           query_result_id: Optional[int] = None,
                           authoritative_result_id: Optional[int] = None,
-                          observed_at: float = 0.0) -> int:
+                          observed_at: float = 0.0,
+                          verdict: "Verdict | None" = None) -> int:
+        """Persist one comparison, with its §8 verdict when one was assigned.
+
+        `verdict` is optional so older callers and the existing tests keep
+        working; those rows simply carry NULL in the tier columns, which reads
+        as "measured before the tier engine existed" rather than as Tier 0.
+        """
+        # The verdict is the authority on classification when present: it has
+        # seen the module outputs and the exclusion gates, and the bare
+        # comparison has not.
+        classification = (verdict.classification if verdict is not None
+                          else c.classification)
         cur = self._conn.execute(
             "INSERT INTO comparisons (observed_at, query_result_id, authoritative_result_id, "
             "resolver, domain, rtype, classification, matched, unpublished, missing, "
-            "ttl_ratio, ttl_inflated, is_anomaly, reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ttl_ratio, ttl_inflated, is_anomaly, reason, tier, tier_label, relation, "
+            "verdict_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (observed_at, query_result_id, authoritative_result_id, resolver, domain, c.rtype,
-             c.classification.value, _join(c.matched), _join(c.unpublished), _join(c.missing),
-             c.ttl_ratio, int(c.ttl_inflated), int(c.classification.needs_review), c.reason),
+             classification.value, _join(c.matched), _join(c.unpublished), _join(c.missing),
+             c.ttl_ratio, int(c.ttl_inflated), int(classification.needs_review),
+             verdict.reason if verdict is not None else c.reason,
+             int(verdict.tier) if verdict is not None else None,
+             verdict.tier.label if verdict is not None else None,
+             verdict.relation.value if verdict is not None else None,
+             json.dumps(verdict.as_evidence()) if verdict is not None else None),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -517,6 +562,62 @@ class Storage:
             " FROM monitoring_events" + where +
             " GROUP BY comparison_classification ORDER BY n DESC",
             params).fetchall()
+
+    def tier_counts(self, since: float = 0.0,
+                    until: float = 0.0) -> dict[int, int]:
+        """How many observations landed on each tier (§8).
+
+        This is the table the methodology asks the dissertation to foreground:
+        which tiers fired, over which window — not dashboard vanity metrics.
+        Rows measured before the tier engine existed carry NULL and are excluded
+        rather than silently counted as Tier 0.
+        """
+        where, params = self._event_filters(since=since, until=until)
+        clause = (where + " AND tier IS NOT NULL") if where \
+            else " WHERE tier IS NOT NULL"
+        rows = self._conn.execute(
+            "SELECT tier, count(*) AS n FROM monitoring_events" + clause +
+            " GROUP BY tier ORDER BY tier", params).fetchall()
+        return {int(row["tier"]): int(row["n"]) for row in rows}
+
+    def tier_rollup(self, column: str = "resolver", since: float = 0.0,
+                    until: float = 0.0) -> list[sqlite3.Row]:
+        """Per-resolver (or per-domain) tier profile over a window.
+
+        Reports the counts that matter for a claim: how often the subject was
+        clean, how often it merely had a health problem, and how often it
+        produced a divergence that survived the exclusion hierarchy.
+        """
+        if column not in ("resolver", "domain"):
+            raise ValueError("column not allowed: " + column)
+        where, params = self._event_filters(since=since, until=until)
+        clause = (where + " AND tier IS NOT NULL") if where \
+            else " WHERE tier IS NOT NULL"
+        return self._conn.execute(
+            "SELECT " + column + " AS key, count(*) AS observations,"
+            " sum(CASE WHEN tier = 0 THEN 1 ELSE 0 END) AS clean,"
+            " sum(CASE WHEN tier = 1 THEN 1 ELSE 0 END) AS benign_explained,"
+            " sum(CASE WHEN tier = 2 THEN 1 ELSE 0 END) AS health_issue,"
+            " sum(CASE WHEN tier = 3 THEN 1 ELSE 0 END) AS freshness,"
+            " sum(CASE WHEN tier = 4 THEN 1 ELSE 0 END) AS unexplained,"
+            " sum(CASE WHEN tier = 5 THEN 1 ELSE 0 END) AS corroborated,"
+            " sum(CASE WHEN tier = 6 THEN 1 ELSE 0 END) AS conclusive,"
+            " max(tier) AS worst_tier,"
+            " max(timestamp) AS last_seen"
+            " FROM monitoring_events" + clause +
+            " GROUP BY " + column + " ORDER BY worst_tier DESC, key",
+            params).fetchall()
+
+    def verdicts_at_or_above(self, tier: int, limit: int = 50,
+                             since: float = 0.0) -> list[sqlite3.Row]:
+        """The observations worth reading — Tier >= `tier`, most recent first."""
+        return self._conn.execute(
+            "SELECT observed_at, resolver, domain, rtype, tier, tier_label,"
+            " relation, classification, reason, unpublished, matched,"
+            " verdict_json"
+            " FROM comparisons WHERE tier >= ? AND observed_at >= ?"
+            " ORDER BY observed_at DESC LIMIT ?",
+            (int(tier), since, limit)).fetchall()
 
     def dnssec_rollup(self, since: float = 0.0,
                       until: float = 0.0) -> list[sqlite3.Row]:
